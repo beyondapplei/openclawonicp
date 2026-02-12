@@ -111,6 +111,13 @@ persistent actor OpenClawOnICP {
     }
   };
 
+  func assertOwnerQuery(caller : Principal) {
+    switch (owner) {
+      case null { Debug.trap("not authorized") };
+      case (?o) { if (o != caller) { Debug.trap("not authorized") } };
+    }
+  };
+
   public query func owner_get() : async ?Principal {
     owner
   };
@@ -309,7 +316,8 @@ persistent actor OpenClawOnICP {
     await Wallet.agentWallet(ic00, caller, Principal.fromActor(OpenClawOnICP))
   };
 
-  public query func canister_principal() : async Principal {
+  public shared query ({ caller }) func canister_principal() : async Principal {
+    assertOwnerQuery(caller);
     Principal.fromActor(OpenClawOnICP)
   };
 
@@ -424,7 +432,8 @@ persistent actor OpenClawOnICP {
     Sessions.reset(users, caller, sessionId, nowNs);
   };
 
-  public query func sessions_list_for(principal : Principal) : async [SessionSummary] {
+  public shared query ({ caller }) func sessions_list_for(principal : Principal) : async [SessionSummary] {
+    assertOwnerQuery(caller);
     switch (users.get(principal)) {
       case null [];
       case (?u) Sessions.list(u);

@@ -93,6 +93,8 @@ export default function AdminApp() {
   const [isAuthed, setIsAuthed] = useState(false);
   const [principalText, setPrincipalText] = useState('');
   const [authLoading, setAuthLoading] = useState(true);
+  const [ownerPrincipalText, setOwnerPrincipalText] = useState('');
+  const [accessLocked, setAccessLocked] = useState(false);
 
   const [status, setStatus] = useState('');
   const [tgStatus, setTgStatus] = useState(null);
@@ -114,6 +116,34 @@ export default function AdminApp() {
 
   const [busy, setBusy] = useState(false);
 
+  function principalToText(p) {
+    if (!p) return '';
+    if (typeof p.toText === 'function') return p.toText();
+    return String(p);
+  }
+
+  async function refreshOwnerAccess(a, principalHint = '') {
+    if (!a) {
+      setOwnerPrincipalText('');
+      setAccessLocked(false);
+      return;
+    }
+    try {
+      const ownerRes = await a.owner_get();
+      const ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
+      setOwnerPrincipalText(ownerText);
+      if (!ownerText) {
+        setAccessLocked(false);
+        return;
+      }
+      const me = (principalHint || principalText || '').trim();
+      setAccessLocked(me !== ownerText);
+    } catch (_) {
+      setOwnerPrincipalText('');
+      setAccessLocked(false);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
@@ -124,7 +154,9 @@ export default function AdminApp() {
         setAuthClient(auth.client);
         setActor(auth.actor);
         setIsAuthed(auth.isAuthenticated);
-        setPrincipalText(auth.principalText || '');
+        const pText = auth.principalText || '';
+        setPrincipalText(pText);
+        await refreshOwnerAccess(auth.actor, pText);
       } finally {
         if (!cancelled) setAuthLoading(false);
       }
@@ -140,9 +172,30 @@ export default function AdminApp() {
     setBusy(true);
     try {
       const r = await loginWithII(authClient);
+
+      const ownerRes = await r.actor.owner_get();
+      let ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
+      if (!ownerText) {
+        await r.actor.whoami();
+        ownerText = r.principalText;
+      }
+
+      if (ownerText !== r.principalText) {
+        const logoutRes = await logoutII(authClient);
+        setActor(logoutRes.actor);
+        setIsAuthed(false);
+        setPrincipalText('');
+        setOwnerPrincipalText(ownerText);
+        setAccessLocked(true);
+        setStatus('');
+        return;
+      }
+
       setActor(r.actor);
       setIsAuthed(true);
       setPrincipalText(r.principalText);
+      setOwnerPrincipalText(ownerText);
+      setAccessLocked(false);
       setStatus(t.ok);
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
@@ -159,6 +212,7 @@ export default function AdminApp() {
       setActor(r.actor);
       setIsAuthed(false);
       setPrincipalText('');
+      await refreshOwnerAccess(r.actor, '');
       setStatus(t.ok);
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
@@ -274,6 +328,25 @@ export default function AdminApp() {
     } finally {
       setBusy(false);
     }
+  }
+
+  const showLoginOnly = !authLoading && !isAuthed && !accessLocked && !ownerPrincipalText;
+  const showLockedBlank = !authLoading && !isAuthed && accessLocked;
+
+  if (showLockedBlank) {
+    return <main className="appShell" />;
+  }
+
+  if (showLoginOnly) {
+    return (
+      <main className="appShell">
+        <div className="topBar langToggle">
+          <button type="button" onClick={() => void login()} disabled={busy}>
+            {t.login}
+          </button>
+        </div>
+      </main>
+    );
   }
 
   return (
