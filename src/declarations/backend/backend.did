@@ -1,0 +1,82 @@
+type TransformArgs = 
+ record {
+   context: blob;
+   response: HttpResponsePayload;
+ };
+type ToolResult = 
+ variant {
+   err: text;
+   ok: text;
+ };
+type SessionSummary = 
+ record {
+   id: text;
+   messageCount: nat;
+   updatedAtNs: int;
+ };
+type SendResult = 
+ variant {
+   err: text;
+   ok: SendOk;
+ };
+type SendOptions = 
+ record {
+   apiKey: text;
+   includeHistory: bool;
+   maxTokens: opt nat;
+   model: text;
+   provider: Provider;
+   skillNames: vec text;
+   systemPrompt: opt text;
+   temperature: opt float64;
+ };
+type SendOk = 
+ record {
+   assistant: ChatMessage;
+   raw: opt text;
+ };
+type Role = 
+ variant {
+   assistant;
+   system;
+   tool;
+   user;
+ };
+type Provider = 
+ variant {
+   anthropic;
+   openai;
+ };
+type HttpResponsePayload = 
+ record {
+   body: blob;
+   headers: vec HttpHeader;
+   status: nat;
+ };
+type HttpHeader = 
+ record {
+   name: text;
+   value: text;
+ };
+type ChatMessage = 
+ record {
+   content: text;
+   role: Role;
+   tsNs: int;
+ };
+service : {
+  http_transform: (args: TransformArgs) -> (HttpResponsePayload) query;
+  sessions_create: (sessionId: text) -> ();
+  sessions_history: (sessionId: text, limit: nat) -> (vec ChatMessage);
+  sessions_list: () -> (vec SessionSummary);
+  sessions_list_for: ("principal": principal) -> (vec SessionSummary) query;
+  sessions_reset: (sessionId: text) -> ();
+  sessions_send: (sessionId: text, message: text, opts: SendOptions) ->
+   (SendResult);
+  skills_delete: (name: text) -> (bool);
+  skills_get: (name: text) -> (opt text);
+  skills_list: () -> (vec text);
+  skills_put: (name: text, markdown: text) -> ();
+  tools_invoke: (name: text, args: vec text) -> (ToolResult);
+  tools_list: () -> (vec text);
+}

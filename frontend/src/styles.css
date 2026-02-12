@@ -1,0 +1,78 @@
+body {
+  padding: 20px 28px;
+  font-family: sans-serif;
+  font-size: 14px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+label {
+  font-weight: 600;
+}
+
+input,
+select,
+textarea {
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font: inherit;
+}
+
+textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+}
+
+button {
+  padding: 8px 12px;
+  border: 1px solid #222;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  min-height: 240px;
+  white-space: pre-wrap;
+}
+
+.msg {
+  margin: 10px 0;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #eee;
+}
+
+.meta {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+
+.status {
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.langToggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+}
