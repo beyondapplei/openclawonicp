@@ -65,7 +65,8 @@ module {
     nowNs : () -> Int,
     callModel : ModelCaller,
   ) : async Types.SendResult {
-    if (Text.size(Text.trim(message, #char ' ')) == 0) {
+    let trimmed = Text.trim(message, #char ' ');
+    if (Text.size(trimmed) == 0) {
       return #err("message is empty");
     };
     if (Text.size(opts.model) == 0) {
@@ -77,6 +78,40 @@ module {
 
     let u = Store.getOrInitUser(users, caller);
     let s = Store.getOrInitSession(u, sessionId, nowNs);
+
+    // OpenClaw-like slash commands handled locally.
+    if (Text.startsWith(trimmed, #text "/")) {
+      let cmd = Text.toLowercase(trimmed);
+      if (cmd == "/help") {
+        return localAssistant(s, nowNs,
+          "Available commands:\n" #
+          "/help\n" #
+          "/status\n" #
+          "/new\n" #
+          "/reset"
+        );
+      };
+
+      if (cmd == "/status") {
+        let text =
+          "session: " # sessionId # "\n" #
+          "provider: " # providerName(opts.provider) # "\n" #
+          "model: " # opts.model # "\n" #
+          "messages: " # Nat.toText(s.messages.size()) # "\n" #
+          "skills: " # Nat.toText(u.skills.size()) # "\n" #
+          "includeHistory: " # (if (opts.includeHistory) "true" else "false");
+        return localAssistant(s, nowNs, text);
+      };
+
+      if (cmd == "/new" or cmd == "/reset") {
+        s.messages.clear();
+        s.updatedAtNs := nowNs();
+        return localAssistant(s, nowNs, "Session reset.");
+      };
+
+      return localAssistant(s, nowNs, "Unknown command. Try /help");
+    };
+
     let ts = nowNs();
     s.messages.add({ role = #user; content = message; tsNs = ts });
     s.updatedAtNs := ts;
@@ -98,6 +133,21 @@ module {
           };
         }
       };
+    }
+  };
+
+  func localAssistant(s : Store.SessionState, nowNs : () -> Int, text : Text) : Types.SendResult {
+    let msg : Types.ChatMessage = { role = #assistant; content = text; tsNs = nowNs() };
+    s.messages.add(msg);
+    s.updatedAtNs := msg.tsNs;
+    #ok({ assistant = msg; raw = null })
+  };
+
+  func providerName(p : Types.Provider) : Text {
+    switch (p) {
+      case (#openai) "openai";
+      case (#anthropic) "anthropic";
+      case (#google) "google";
     }
   };
 

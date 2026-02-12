@@ -204,8 +204,8 @@ export default function AdminApp() {
   }
 
   return (
-    <main>
-      <div className="langToggle">
+    <main className="appShell">
+      <div className="topBar langToggle">
         <button type="button" onClick={() => (window.location.href = './')} style={{ marginRight: 8 }}>
           {t.back}
         </button>
@@ -214,9 +214,9 @@ export default function AdminApp() {
         </button>
       </div>
 
-      <h2>{t.title}</h2>
+      <h2 className="pageTitle">{t.title}</h2>
 
-      <section style={{ marginBottom: 16 }}>
+      <section className="panel" style={{ marginBottom: 16 }}>
         <h3>{t.status}</h3>
         <button type="button" onClick={() => void refreshStatus()} disabled={busy}>
           {t.refresh}
@@ -233,7 +233,7 @@ export default function AdminApp() {
         </div>
       </section>
 
-      <section style={{ marginBottom: 16 }}>
+      <section className="panel" style={{ marginBottom: 16 }}>
         <h3>{t.tgConfig}</h3>
         <div className="row">
           <label>{t.botToken}</label>
@@ -248,7 +248,7 @@ export default function AdminApp() {
         </div>
       </section>
 
-      <section style={{ marginBottom: 16 }}>
+      <section className="panel" style={{ marginBottom: 16 }}>
         <h3>{t.llmConfig}</h3>
         <div className="row">
           <label>{t.provider}</label>
@@ -280,7 +280,7 @@ export default function AdminApp() {
         </div>
       </section>
 
-      <section>
+      <section className="panel">
         <h3>{t.webhook}</h3>
         <div className="row">
           <label>{t.webhookUrl}</label>
@@ -289,7 +289,7 @@ export default function AdminApp() {
         </div>
       </section>
 
-      <section style={{ marginTop: 16 }}>
+      <section className="panel" style={{ marginTop: 16 }}>
         <h3>{t.skills}</h3>
         <div className="row" style={{ marginBottom: 8 }}>
           <button type="button" onClick={() => void loadSkills()} disabled={busy}>
@@ -308,7 +308,7 @@ export default function AdminApp() {
                 type="button"
                 onClick={() => void loadSkillDetail(name)}
                 disabled={busy}
-                style={{ background: name === selectedSkill ? '#f3f3f3' : '#fff' }}
+                className={name === selectedSkill ? 'selectedSkill' : ''}
               >
                 {name}
               </button>

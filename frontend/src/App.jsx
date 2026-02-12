@@ -183,12 +183,12 @@ export default function App() {
   }, [provider, apiKey, lang]);
 
   function openAdminPage() {
-    window.open('admin.html', '_blank', 'noopener,noreferrer');
+    window.location.href = 'admin.html';
   }
 
   return (
-    <main>
-      <div className="langToggle">
+    <main className="appShell">
+      <div className="topBar langToggle">
         <button type="button" onClick={openAdminPage} style={{ marginRight: 8 }}>
           {t.admin}
         </button>
@@ -197,8 +197,9 @@ export default function App() {
         </button>
       </div>
 
-      <h2>{t.title}</h2>
+      <h2 className="pageTitle">{t.title}</h2>
 
+      <section className="panel">
       <div className="row" style={{ margin: '10px 0 14px' }}>
         <label htmlFor="sessionId">{t.session}</label>
         <input
@@ -267,8 +268,9 @@ export default function App() {
           <div className="status">{status}</div>
         </div>
       </div>
+      </section>
 
-      <div className="chat">
+      <div className="chat panel">
         {history.map((m, idx) => {
           const role = Object.keys(m.role)[0];
           return (
