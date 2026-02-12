@@ -67,6 +67,88 @@ module {
     }
   };
 
+  public func listModels(
+    ic : Http,
+    transformFn : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    provider : Types.Provider,
+    apiKey : Text,
+  ) : async Result.Result<[Text], Text> {
+    switch (provider) {
+      case (#google) { await listGoogleModels(ic, transformFn, httpCycles, apiKey) };
+      case (_) { #err("listModels not supported for this provider") };
+    }
+  };
+
+  func listGoogleModels(
+    ic : Http,
+    transformFn : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    apiKey : Text,
+  ) : async Result.Result<[Text], Text> {
+    let url = "https://generativelanguage.googleapis.com/v1beta/models?key=" # apiKey;
+    let req : HttpTypes.HttpRequestArgs = {
+      url;
+      max_response_bytes = ?(1_000_000 : Nat64);
+      method = #get;
+      headers = [];
+      body = null;
+      transform = ?{ function = transformFn; context = Blob.fromArray([]) };
+    };
+
+    let resp = await (with cycles = httpCycles) ic.http_request(req);
+    if (resp.status < 200 or resp.status >= 300) {
+      let body = switch (Text.decodeUtf8(resp.body)) { case null ""; case (?t) t };
+      return #err("http status " # Nat.toText(resp.status) # ": " # body);
+    };
+
+    let raw = switch (Text.decodeUtf8(resp.body)) {
+      case null return #err("response body is not valid UTF-8");
+      case (?t) t;
+    };
+
+    // Typical response has entries like: {"name":"models/gemini-1.5-flash", ...}
+    let names = Json.extractAllStringsAfterAny(raw, ["\"name\":\"", "\"name\": \""]);
+    let out = Buffer.Buffer<Text>(names.size());
+    for (n in names.vals()) {
+      let trimmed = Text.trim(n, #char ' ');
+      let maybe = switch (Text.stripStart(trimmed, #text "models/")) { case null null; case (?t) ?t };
+      switch (maybe) {
+        case null {};
+        case (?id) {
+          // Keep only gemini* models for this demo.
+          if (Text.startsWith(id, #text "gemini")) {
+            if (not contains(out, id)) out.add(id);
+          };
+        };
+      }
+    };
+
+    // Prefer flash models first (often cheaper + more likely to have quota enabled),
+    // then everything else. Frontend defaults to the first entry.
+    let flash = Buffer.Buffer<Text>(out.size());
+    let rest = Buffer.Buffer<Text>(out.size());
+    for (id in out.vals()) {
+      if (Text.contains(id, #text "flash")) {
+        flash.add(id);
+      } else {
+        rest.add(id);
+      }
+    };
+    flash.append(rest);
+    #ok(Buffer.toArray(flash))
+  };
+
+  func contains(buf : Buffer.Buffer<Text>, v : Text) : Bool {
+    var i : Nat = 0;
+    let n = buf.size();
+    while (i < n) {
+      if (buf.get(i) == v) return true;
+      i += 1;
+    };
+    false
+  };
+
   func buildOpenAIRequest(
     model : Text,
     apiKey : Text,

@@ -70,6 +70,9 @@ export default function App() {
   const [apiKey, setApiKey] = useState('');
   const [message, setMessage] = useState('');
 
+  const [googleModels, setGoogleModels] = useState([]);
+  const [googleModelsLoading, setGoogleModelsLoading] = useState(false);
+
   const [history, setHistory] = useState([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
@@ -143,6 +146,40 @@ export default function App() {
     if (provider === 'google' && model === 'gpt-4o-mini') setModel('gemini-1.5-flash');
   }, [provider]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadGoogleModels() {
+      if (provider !== 'google') return;
+      if (!apiKey.trim()) {
+        setGoogleModels([]);
+        return;
+      }
+
+      setGoogleModelsLoading(true);
+      try {
+        const res = await backend.models_list(providerVariant('google'), apiKey.trim());
+        if (cancelled) return;
+        if ('ok' in res) {
+          const models = res.ok || [];
+          setGoogleModels(models);
+          if (models.length > 0) setModel(models[0]);
+        } else {
+          setGoogleModels([]);
+          setStatus(`${t.errPrefix}${res.err}`);
+        }
+      } catch (e) {
+        if (!cancelled) setStatus(`${t.exPrefix}${String(e)}`);
+      } finally {
+        if (!cancelled) setGoogleModelsLoading(false);
+      }
+    }
+
+    void loadGoogleModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider, apiKey, lang]);
+
   return (
     <main>
       <div className="langToggle">
@@ -171,7 +208,27 @@ export default function App() {
         </select>
 
         <label htmlFor="model">{t.model}</label>
-        <input id="model" type="text" value={model} onChange={(e) => setModel(e.target.value)} style={{ minWidth: 260 }} />
+        {provider === 'google' ? (
+          <select
+            id="model"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={googleModelsLoading || googleModels.length === 0}
+            style={{ minWidth: 260 }}
+          >
+            {googleModels.length === 0 ? (
+              <option value="">{googleModelsLoading ? 'Loading…' : '—'}</option>
+            ) : (
+              googleModels.map((m) => (
+                <option value={m} key={m}>
+                  {m}
+                </option>
+              ))
+            )}
+          </select>
+        ) : (
+          <input id="model" type="text" value={model} onChange={(e) => setModel(e.target.value)} style={{ minWidth: 260 }} />
+        )}
 
         <label htmlFor="apiKey">{t.apiKey}</label>
         <input

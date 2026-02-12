@@ -9,6 +9,15 @@ export const idlFactory = ({ IDL }) => {
     'context' : IDL.Vec(IDL.Nat8),
     'response' : HttpResponsePayload,
   });
+  const Provider = IDL.Variant({
+    'openai' : IDL.Null,
+    'google' : IDL.Null,
+    'anthropic' : IDL.Null,
+  });
+  const ModelsResult = IDL.Variant({
+    'ok' : IDL.Vec(IDL.Text),
+    'err' : IDL.Text,
+  });
   const Role = IDL.Variant({
     'tool' : IDL.Null,
     'user' : IDL.Null,
@@ -24,11 +33,6 @@ export const idlFactory = ({ IDL }) => {
     'id' : IDL.Text,
     'updatedAtNs' : IDL.Int,
     'messageCount' : IDL.Nat,
-  });
-  const Provider = IDL.Variant({
-    'openai' : IDL.Null,
-    'google' : IDL.Null,
-    'anthropic' : IDL.Null,
   });
   const SendOptions = IDL.Record({
     'model' : IDL.Text,
@@ -52,6 +56,7 @@ export const idlFactory = ({ IDL }) => {
         [HttpResponsePayload],
         ['query'],
       ),
+    'models_list' : IDL.Func([Provider, IDL.Text], [ModelsResult], []),
     'sessions_create' : IDL.Func([IDL.Text], [], []),
     'sessions_history' : IDL.Func(
         [IDL.Text, IDL.Nat],

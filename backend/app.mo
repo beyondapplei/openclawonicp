@@ -1,6 +1,7 @@
 import Nat "mo:base/Nat";
 import Principal "mo:base/Principal";
 import Result "mo:base/Result";
+import Text "mo:base/Text";
 import Time "mo:base/Time";
 
 import HttpTypes "./openclaw/HttpTypes";
@@ -24,6 +25,8 @@ persistent actor OpenClawOnICP {
   public type SendOk = Types.SendOk;
   public type SendResult = Types.SendResult;
   public type ToolResult = Types.ToolResult;
+
+  public type ModelsResult = Result.Result<[Text], Text>;
 
   // -----------------------------
   // Minimal HTTP outcall interface
@@ -86,6 +89,12 @@ persistent actor OpenClawOnICP {
   };
 
   transient let defaultHttpCycles : Nat = 30_000_000_000;
+
+  // Model discovery (for UI dropdowns)
+  public shared ({ caller = _ }) func models_list(provider : Provider, apiKey : Text) : async ModelsResult {
+    if (Text.size(Text.trim(apiKey, #char ' ')) == 0) return #err("apiKey is required");
+    await Llm.listModels(ic, http_transform, defaultHttpCycles, provider, apiKey)
+  };
 
   func modelCaller(
     provider : Provider,

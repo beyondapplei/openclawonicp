@@ -13,6 +13,8 @@ export interface HttpResponsePayload {
   'body' : Uint8Array | number[],
   'headers' : Array<HttpHeader>,
 }
+export type ModelsResult = { 'ok' : Array<string> } |
+  { 'err' : string };
 export type Provider = { 'openai' : null } |
   { 'google' : null } |
   { 'anthropic' : null };
@@ -46,6 +48,7 @@ export interface TransformArgs {
 }
 export interface _SERVICE {
   'http_transform' : ActorMethod<[TransformArgs], HttpResponsePayload>,
+  'models_list' : ActorMethod<[Provider, string], ModelsResult>,
   'sessions_create' : ActorMethod<[string], undefined>,
   'sessions_history' : ActorMethod<[string, bigint], Array<ChatMessage>>,
   'sessions_list' : ActorMethod<[], Array<SessionSummary>>,

@@ -48,6 +48,11 @@ type Provider =
    google;
    openai;
  };
+type ModelsResult = 
+ variant {
+   err: text;
+   ok: vec text;
+ };
 type HttpResponsePayload = 
  record {
    body: blob;
@@ -67,6 +72,7 @@ type ChatMessage =
  };
 service : {
   http_transform: (args: TransformArgs) -> (HttpResponsePayload) query;
+  models_list: (provider: Provider, apiKey: text) -> (ModelsResult);
   sessions_create: (sessionId: text) -> ();
   sessions_history: (sessionId: text, limit: nat) -> (vec ChatMessage);
   sessions_list: () -> (vec SessionSummary);

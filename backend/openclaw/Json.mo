@@ -39,6 +39,33 @@ module {
     null
   };
 
+  public func extractAllStringsAfterAny(raw : Text, needles : [Text]) : [Text] {
+    // Returns all extracted values for the FIRST needle that yields at least one value.
+    for (n in needles.vals()) {
+      let values = extractAllStringsAfter(raw, n);
+      if (values.size() > 0) return values;
+    };
+    []
+  };
+
+  public func extractAllStringsAfter(raw : Text, needle : Text) : [Text] {
+    let out = Buffer.Buffer<Text>(4);
+    let it = Text.split(raw, #text needle);
+    // Skip prefix before first match.
+    ignore it.next();
+    loop {
+      switch (it.next()) {
+        case null { return Buffer.toArray(out) };
+        case (?after) {
+          switch (readJsonStringFromText(after)) {
+            case null {};
+            case (?v) out.add(v);
+          }
+        };
+      }
+    }
+  };
+
   func readJsonStringFromText(after : Text) : ?Text {
     let pieces = Buffer.Buffer<Text>(16);
     let cs = after.chars();
