@@ -127,7 +127,8 @@ module {
   ) : (Text, [HttpTypes.HttpHeader], Text) {
     // Google AI Studio / Gemini (Generative Language API)
     // Endpoint: /v1beta/models/{model}:generateContent?key=...
-    let url = "https://generativelanguage.googleapis.com/v1beta/models/" # model # ":generateContent?key=" # apiKey;
+    let m = normalizeGoogleModel(model);
+    let url = "https://generativelanguage.googleapis.com/v1beta/models/" # m # ":generateContent?key=" # apiKey;
     let headers : [HttpTypes.HttpHeader] = [
       { name = "Content-Type"; value = "application/json" },
     ];
@@ -143,6 +144,21 @@ module {
       genCfg #
       "}";
     (url, headers, body)
+  };
+
+  func normalizeGoogleModel(model : Text) : Text {
+    let trimmed = Text.trim(model, #char ' ');
+    let noPrefix = switch (Text.stripStart(trimmed, #text "models/")) {
+      case null trimmed;
+      case (?t) t;
+    };
+
+    if (Text.size(noPrefix) == 0 or noPrefix == "gemini") {
+      // Common shorthand -> default model id.
+      // If you want another model, pass e.g. gemini-1.5-flash / gemini-1.5-pro.
+      return "gemini-1.5-flash";
+    };
+    noPrefix
   };
 
   func optNatField(field : Text, v : ?Nat) : Text {

@@ -64,6 +64,7 @@
 - HTTPS outcalls 会消耗 cycles
 - 本项目当前把 API Key 作为 `sessions_send` 参数从前端传入（最简单，但 key 会出现在 canister 调用参数中）；生产环境建议改为更安全的密钥管理方案
 - Google (Gemini) 的 key 可从 AI Studio 获取；本项目通过 Generative Language API `v1beta/models/{model}:generateContent` 调用
+	- 模型名需要是具体 id（例如 `gemini-1.5-flash`、`gemini-1.5-pro`）；本项目也会把简写 `gemini` 自动归一化为 `gemini-1.5-flash`
 
 ## 后端 API（概览）
 
