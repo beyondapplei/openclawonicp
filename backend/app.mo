@@ -1,5 +1,7 @@
 import Nat "mo:base/Nat";
+import Nat16 "mo:base/Nat16";
 import Principal "mo:base/Principal";
+import Debug "mo:base/Debug";
 import Result "mo:base/Result";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
@@ -10,6 +12,7 @@ import Sessions "./openclaw/Sessions";
 import Skills "./openclaw/Skills";
 import Store "./openclaw/Store";
 import Tools "./openclaw/Tools";
+import Telegram "./openclaw/Telegram";
 import Types "./openclaw/Types";
 
 persistent actor OpenClawOnICP {
@@ -28,6 +31,12 @@ persistent actor OpenClawOnICP {
 
   public type ModelsResult = Result.Result<[Text], Text>;
 
+  public type TgStatus = {
+    configured : Bool;
+    hasSecret : Bool;
+    hasLlmConfig : Bool;
+  };
+
   // -----------------------------
   // Minimal HTTP outcall interface
   // -----------------------------
@@ -38,8 +47,204 @@ persistent actor OpenClawOnICP {
 
   transient let ic : Llm.Http = actor ("aaaaa-aa");
 
+  // -----------------------------
+  // Inbound canister HTTP (for Telegram webhooks)
+  // -----------------------------
+
+  type HeaderField = (Text, Text);
+  type InHttpRequest = {
+    method : Text;
+    url : Text;
+    headers : [HeaderField];
+    body : Blob;
+  };
+  type InHttpResponse = {
+    status_code : Nat16;
+    headers : [HeaderField];
+    body : Blob;
+    streaming_strategy : ?{
+      #Callback : {
+        callback : shared query () -> async (); // unused
+        token : Blob;
+      }
+    };
+    upgrade : ?Bool;
+  };
+
   public query func http_transform(args : TransformArgs) : async HttpResponsePayload {
     { status = args.response.status; headers = []; body = args.response.body };
+  };
+
+  // -----------------------------
+  // Admin + Telegram configuration
+  // -----------------------------
+
+  var owner : ?Principal = null;
+  var tgBotToken : ?Text = null;
+  var tgSecretToken : ?Text = null;
+  var tgLlmOpts : ?SendOptions = null;
+
+  func assertOwner(caller : Principal) {
+    switch (owner) {
+      case null { owner := ?caller };
+      case (?o) { if (o != caller) { Debug.trap("not authorized") } };
+    }
+  };
+
+  public shared ({ caller }) func admin_set_tg(botToken : Text, secretToken : ?Text) : async () {
+    assertOwner(caller);
+    tgBotToken := ?Text.trim(botToken, #char ' ');
+    tgSecretToken := secretToken;
+  };
+
+  public shared ({ caller }) func admin_set_llm_opts(opts : SendOptions) : async () {
+    assertOwner(caller);
+    tgLlmOpts := ?opts;
+  };
+
+  public shared ({ caller }) func admin_tg_set_webhook(webhookUrl : Text) : async Result.Result<Text, Text> {
+    assertOwner(caller);
+    switch (tgBotToken) {
+      case null return #err("telegram bot token not configured");
+      case (?token) {
+        await Telegram.setWebhook(ic, http_transform, defaultHttpCycles, token, webhookUrl, tgSecretToken)
+      };
+    }
+  };
+
+  public shared ({ caller = _ }) func tg_status() : async TgStatus {
+    {
+      configured = (tgBotToken != null);
+      hasSecret = (tgSecretToken != null);
+      hasLlmConfig = (tgLlmOpts != null);
+    }
+  };
+
+  func headerGet(headers : [HeaderField], key : Text) : ?Text {
+    for ((k, v) in headers.vals()) {
+      if (Text.toLowercase(k) == Text.toLowercase(key)) return ?v;
+    };
+    null
+  };
+
+  // Canister HTTP entrypoint (query): upgrade Telegram webhooks to update.
+  public query func http_request(req : InHttpRequest) : async InHttpResponse {
+    if (req.method == "POST" and Text.startsWith(req.url, #text "/tg/webhook")) {
+      return {
+        status_code = 200;
+        headers = [("content-type", "text/plain")];
+        body = Text.encodeUtf8("ok");
+        streaming_strategy = null;
+        upgrade = ?true;
+      };
+    };
+
+    {
+      status_code = 404;
+      headers = [("content-type", "text/plain")];
+      body = Text.encodeUtf8("not found");
+      streaming_strategy = null;
+      upgrade = null;
+    }
+  };
+
+  // Canister HTTP update handler: process Telegram webhook.
+  public shared ({ caller = _ }) func http_request_update(req : InHttpRequest) : async InHttpResponse {
+    if (not (req.method == "POST" and Text.startsWith(req.url, #text "/tg/webhook"))) {
+      return {
+        status_code = 404;
+        headers = [("content-type", "text/plain")];
+        body = Text.encodeUtf8("not found");
+        streaming_strategy = null;
+        upgrade = null;
+      };
+    };
+
+    // Optional secret check.
+    switch (tgSecretToken) {
+      case null {};
+      case (?secret) {
+        let hdr = headerGet(req.headers, "x-telegram-bot-api-secret-token");
+        if (hdr != ?secret) {
+          return {
+            status_code = 401;
+            headers = [("content-type", "text/plain")];
+            body = Text.encodeUtf8("unauthorized");
+            streaming_strategy = null;
+            upgrade = null;
+          };
+        };
+      };
+    };
+
+    let bodyText = switch (Text.decodeUtf8(req.body)) {
+      case null {
+        return {
+          status_code = 400;
+          headers = [("content-type", "text/plain")];
+          body = Text.encodeUtf8("bad request");
+          streaming_strategy = null;
+          upgrade = null;
+        };
+      };
+      case (?t) t;
+    };
+
+    let parsed = Telegram.parseUpdate(bodyText);
+    switch (parsed) {
+      case null {
+        return {
+          status_code = 200;
+          headers = [("content-type", "text/plain")];
+          body = Text.encodeUtf8("ok");
+          streaming_strategy = null;
+          upgrade = null;
+        };
+      };
+      case (?u) {
+        let token = switch (tgBotToken) {
+          case null return {
+            status_code = 503;
+            headers = [("content-type", "text/plain")];
+            body = Text.encodeUtf8("telegram not configured");
+            streaming_strategy = null;
+            upgrade = null;
+          };
+          case (?t) t;
+        };
+
+        let opts = switch (tgLlmOpts) {
+          case null return {
+            status_code = 503;
+            headers = [("content-type", "text/plain")];
+            body = Text.encodeUtf8("llm not configured");
+            streaming_strategy = null;
+            upgrade = null;
+          };
+          case (?o) o;
+        };
+
+        // Use canister principal as a dedicated namespace so it doesn't collide with anonymous web users.
+        let tgUser = Principal.fromActor(OpenClawOnICP);
+        let sessionId = "tg:" # Nat.toText(u.chatId);
+
+        let sendRes = await Sessions.send(users, tgUser, sessionId, u.text, opts, nowNs, modelCaller);
+        switch (sendRes) {
+          case (#err(_)) {};
+          case (#ok(ok)) {
+            ignore await Telegram.sendMessage(ic, http_transform, defaultHttpCycles, token, u.chatId, ok.assistant.content);
+          };
+        };
+
+        {
+          status_code = 200;
+          headers = [("content-type", "text/plain")];
+          body = Text.encodeUtf8("ok");
+          streaming_strategy = null;
+          upgrade = null;
+        }
+      };
+    }
   };
 
   // -----------------------------

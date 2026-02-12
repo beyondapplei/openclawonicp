@@ -7,17 +7,40 @@ export interface ChatMessage {
   'role' : Role,
   'tsNs' : bigint,
 }
+export type HeaderField = [string, string];
 export interface HttpHeader { 'value' : string, 'name' : string }
 export interface HttpResponsePayload {
   'status' : bigint,
   'body' : Uint8Array | number[],
   'headers' : Array<HttpHeader>,
 }
+export interface InHttpRequest {
+  'url' : string,
+  'method' : string,
+  'body' : Uint8Array | number[],
+  'headers' : Array<HeaderField>,
+}
+export interface InHttpResponse {
+  'body' : Uint8Array | number[],
+  'headers' : Array<HeaderField>,
+  'upgrade' : [] | [boolean],
+  'streaming_strategy' : [] | [
+    {
+        'Callback' : {
+          'token' : Uint8Array | number[],
+          'callback' : [Principal, string],
+        }
+      }
+  ],
+  'status_code' : number,
+}
 export type ModelsResult = { 'ok' : Array<string> } |
   { 'err' : string };
 export type Provider = { 'openai' : null } |
   { 'google' : null } |
   { 'anthropic' : null };
+export type Result = { 'ok' : string } |
+  { 'err' : string };
 export type Role = { 'tool' : null } |
   { 'user' : null } |
   { 'assistant' : null } |
@@ -40,6 +63,11 @@ export interface SessionSummary {
   'updatedAtNs' : bigint,
   'messageCount' : bigint,
 }
+export interface TgStatus {
+  'hasLlmConfig' : boolean,
+  'configured' : boolean,
+  'hasSecret' : boolean,
+}
 export type ToolResult = { 'ok' : string } |
   { 'err' : string };
 export interface TransformArgs {
@@ -47,6 +75,11 @@ export interface TransformArgs {
   'response' : HttpResponsePayload,
 }
 export interface _SERVICE {
+  'admin_set_llm_opts' : ActorMethod<[SendOptions], undefined>,
+  'admin_set_tg' : ActorMethod<[string, [] | [string]], undefined>,
+  'admin_tg_set_webhook' : ActorMethod<[string], Result>,
+  'http_request' : ActorMethod<[InHttpRequest], InHttpResponse>,
+  'http_request_update' : ActorMethod<[InHttpRequest], InHttpResponse>,
   'http_transform' : ActorMethod<[TransformArgs], HttpResponsePayload>,
   'models_list' : ActorMethod<[Provider, string], ModelsResult>,
   'sessions_create' : ActorMethod<[string], undefined>,
@@ -59,6 +92,7 @@ export interface _SERVICE {
   'skills_get' : ActorMethod<[string], [] | [string]>,
   'skills_list' : ActorMethod<[], Array<string>>,
   'skills_put' : ActorMethod<[string, string], undefined>,
+  'tg_status' : ActorMethod<[], TgStatus>,
   'tools_invoke' : ActorMethod<[string, Array<string>], ToolResult>,
   'tools_list' : ActorMethod<[], Array<string>>,
 }

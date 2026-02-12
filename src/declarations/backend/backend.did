@@ -8,6 +8,12 @@ type ToolResult =
    err: text;
    ok: text;
  };
+type TgStatus = 
+ record {
+   configured: bool;
+   hasLlmConfig: bool;
+   hasSecret: bool;
+ };
 type SessionSummary = 
  record {
    id: text;
@@ -42,6 +48,11 @@ type Role =
    tool;
    user;
  };
+type Result = 
+ variant {
+   err: text;
+   ok: text;
+ };
 type Provider = 
  variant {
    anthropic;
@@ -52,6 +63,26 @@ type ModelsResult =
  variant {
    err: text;
    ok: vec text;
+ };
+type InHttpResponse = 
+ record {
+   body: blob;
+   headers: vec HeaderField;
+   status_code: nat16;
+   streaming_strategy:
+    opt
+     variant {Callback: record {
+                          callback: func () -> () query;
+                          token: blob;
+                        };};
+   upgrade: opt bool;
+ };
+type InHttpRequest = 
+ record {
+   body: blob;
+   headers: vec HeaderField;
+   method: text;
+   url: text;
  };
 type HttpResponsePayload = 
  record {
@@ -64,6 +95,11 @@ type HttpHeader =
    name: text;
    value: text;
  };
+type HeaderField = 
+ record {
+   text;
+   text;
+ };
 type ChatMessage = 
  record {
    content: text;
@@ -71,6 +107,11 @@ type ChatMessage =
    tsNs: int;
  };
 service : {
+  admin_set_llm_opts: (opts: SendOptions) -> ();
+  admin_set_tg: (botToken: text, secretToken: opt text) -> ();
+  admin_tg_set_webhook: (webhookUrl: text) -> (Result);
+  http_request: (req: InHttpRequest) -> (InHttpResponse) query;
+  http_request_update: (req: InHttpRequest) -> (InHttpResponse);
   http_transform: (args: TransformArgs) -> (HttpResponsePayload) query;
   models_list: (provider: Provider, apiKey: text) -> (ModelsResult);
   sessions_create: (sessionId: text) -> ();
@@ -84,6 +125,7 @@ service : {
   skills_get: (name: text) -> (opt text);
   skills_list: () -> (vec text);
   skills_put: (name: text, markdown: text) -> ();
+  tg_status: () -> (TgStatus);
   tools_invoke: (name: text, args: vec text) -> (ToolResult);
   tools_list: () -> (vec text);
 }

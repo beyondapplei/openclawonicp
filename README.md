@@ -83,6 +83,39 @@
 	- `tools_list()`
 	- `tools_invoke(name, args)`
 
+## Telegram 接入（Bot Webhook）
+
+本项目支持把 Telegram 当作“聊天入口”：你在 Telegram 里给 bot 发消息，后端 canister 会在链上调用 LLM 生成回复，并通过 Telegram `sendMessage` 回写。
+
+### 1) 创建 Bot
+
+用 BotFather 创建 bot 并拿到 `BOT_TOKEN`。
+
+### 2) 在 canister 配置 Telegram + LLM
+
+在 `dfx` 或你自己的管理脚本里调用：
+
+- `admin_set_tg(botToken, secretToken)`：设置 bot token（建议同时设置 secret）
+- `admin_set_llm_opts(opts)`：设置 Telegram 通道使用的默认 LLM 配置（provider/model/apiKey 等）
+
+说明：为了让你能直接在 Telegram 控制它，这里的 token / LLM apiKey 会存到 canister 状态里；生产环境请谨慎处理密钥与访问控制。
+
+### 3) 设置 Webhook
+
+你需要一个公网可访问的 canister URL（主网）：
+
+- `https://<canister-id>.icp0.io/tg/webhook`
+
+然后调用：
+
+- `admin_tg_set_webhook("https://<canister-id>.icp0.io/tg/webhook")`
+
+如果你在 `admin_set_tg` 里设置了 `secretToken`，Telegram 会在请求头 `X-Telegram-Bot-Api-Secret-Token` 带上该值，后端会校验。
+
+### 4) 使用
+
+在 Telegram 里给 bot 发消息即可。会话按 chat id 隔离：`sessionId = "tg:<chatId>"`。
+
 ## 本次改动（相对 ICP Ninja HelloWorld 模板）
 
 - 后端从 HelloWorld 重构为 OpenClaw 风格最小子集：会话/历史、技能、工具、LLM outcalls
