@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { backend } from 'declarations/backend';
+import { computeAddress } from 'ethers';
+import { initAuth, loginWithII, logoutII } from './auth';
 
 const I18N = {
   zh: {
@@ -24,6 +25,44 @@ const I18N = {
     needMsg: 'message 不能为空',
     lang: 'English',
     admin: '管理界面',
+    login: 'Identity 登录',
+    logout: '退出登录',
+    wallet: '钱包',
+    principal: 'Principal',
+    icpRecv: 'ICP 接受地址',
+    ethWallet: 'Agent ETH 钱包',
+    toPrincipal: '目标 Principal',
+    amountE8s: '金额 (e8s)',
+    sendIcp: '发送 ICP',
+    sendEth: '发送 ETH',
+    sendIcrc1: '发送 ICRC1',
+    sendErc20: '发送 ERC20',
+    refreshBalances: '刷新余额',
+    ethNet: 'ETH 网络',
+    rpcUrl: 'RPC URL（可选）',
+    ethTo: 'ETH 目标地址',
+    ethAmount: 'ETH 数量',
+    erc20Token: 'ERC20 合约地址',
+    erc20To: 'ERC20 目标地址',
+    erc20Amount: 'ERC20 数量(最小单位)',
+    balances: '余额',
+    balIcp: 'ICP 余额(e8s)',
+    balEth: 'ETH 余额(wei)',
+    balIcrc1: 'ICRC1 余额',
+    balErc20: 'ERC20 余额',
+    icrc1Ledger: 'ICRC1 Ledger Principal',
+    icrc1Amount: 'ICRC1 金额',
+    icrc1Fee: 'ICRC1 Fee（可选）',
+    needLedger: 'Ledger Principal 不能为空',
+    needIcrc1Amount: 'ICRC1 金额必须大于 0',
+    needErc20Token: 'ERC20 合约地址不能为空',
+    needErc20To: 'ERC20 目标地址不能为空',
+    needErc20Amount: 'ERC20 数量必须大于 0',
+    needTo: '目标 Principal 不能为空',
+    needAmount: '金额必须大于 0',
+    needEthTo: 'ETH 目标地址不能为空',
+    needEthAmount: 'ETH 数量必须大于 0',
+    authLoading: '身份初始化中…',
   },
   en: {
     title: 'OpenClaw on ICP (minimal)',
@@ -47,6 +86,44 @@ const I18N = {
     needMsg: 'Message is required',
     lang: '中文',
     admin: 'Admin',
+    login: 'Login with Identity',
+    logout: 'Logout',
+    wallet: 'Wallet',
+    principal: 'Principal',
+    icpRecv: 'ICP Receive Address',
+    ethWallet: 'Agent ETH Wallet',
+    toPrincipal: 'To Principal',
+    amountE8s: 'Amount (e8s)',
+    sendIcp: 'Send ICP',
+    sendEth: 'Send ETH',
+    sendIcrc1: 'Send ICRC1',
+    sendErc20: 'Send ERC20',
+    refreshBalances: 'Refresh Balances',
+    ethNet: 'ETH Network',
+    rpcUrl: 'RPC URL (optional)',
+    ethTo: 'ETH Destination',
+    ethAmount: 'ETH Amount',
+    erc20Token: 'ERC20 Token Address',
+    erc20To: 'ERC20 Destination',
+    erc20Amount: 'ERC20 Amount (base unit)',
+    balances: 'Balances',
+    balIcp: 'ICP Balance (e8s)',
+    balEth: 'ETH Balance (wei)',
+    balIcrc1: 'ICRC1 Balance',
+    balErc20: 'ERC20 Balance',
+    icrc1Ledger: 'ICRC1 Ledger Principal',
+    icrc1Amount: 'ICRC1 Amount',
+    icrc1Fee: 'ICRC1 Fee (optional)',
+    needLedger: 'Ledger principal is required',
+    needIcrc1Amount: 'ICRC1 amount must be greater than 0',
+    needErc20Token: 'ERC20 token address is required',
+    needErc20To: 'ERC20 destination is required',
+    needErc20Amount: 'ERC20 amount must be greater than 0',
+    needTo: 'Destination principal is required',
+    needAmount: 'Amount must be greater than 0',
+    needEthTo: 'ETH destination is required',
+    needEthAmount: 'ETH amount must be greater than 0',
+    authLoading: 'Initializing identity…',
   },
 };
 
@@ -66,6 +143,13 @@ export default function App() {
   const [lang, setLang] = useState('zh');
   const t = useMemo(() => I18N[lang] ?? I18N.zh, [lang]);
 
+  const [authClient, setAuthClient] = useState(null);
+  const [actor, setActor] = useState(null);
+  const [isAuthed, setIsAuthed] = useState(false);
+  const [principalText, setPrincipalText] = useState('');
+  const [ethWallet, setEthWallet] = useState('');
+  const [authLoading, setAuthLoading] = useState(true);
+
   const [sessionId, setSessionId] = useState('main');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4o-mini');
@@ -79,10 +163,30 @@ export default function App() {
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
+  async function refreshWallet(a = actor) {
+    if (!a || !isAuthed) {
+      setEthWallet('');
+      return;
+    }
+    try {
+      const res = await a.agent_wallet();
+      if ('ok' in res) {
+        const pubHex = `0x${res.ok.publicKeyHex}`;
+        const addr = computeAddress(pubHex);
+        setEthWallet(addr);
+      } else {
+        setStatus(`${t.errPrefix}${res.err}`);
+      }
+    } catch (e) {
+      setStatus(`${t.exPrefix}${String(e)}`);
+    }
+  }
+
   async function refresh(nextSessionId = sessionId) {
+    if (!actor) return;
     const sid = (nextSessionId || 'main').trim() || 'main';
     setSessionId(sid);
-    const h = await backend.sessions_history(sid, 50);
+    const h = await actor.sessions_history(sid, 50);
     setHistory(h);
   }
 
@@ -108,7 +212,8 @@ export default function App() {
     };
 
     try {
-      const res = await backend.sessions_send(sid, message, opts);
+      if (!actor) throw new Error('backend actor not ready');
+      const res = await actor.sessions_send(sid, message, opts);
       if ('ok' in res) {
         setMessage('');
         await refresh(sid);
@@ -128,7 +233,8 @@ export default function App() {
     setBusy(true);
     setStatus(t.resetIng);
     try {
-      await backend.sessions_reset(sid);
+      if (!actor) throw new Error('backend actor not ready');
+      await actor.sessions_reset(sid);
       await refresh(sid);
       setStatus(t.resetDone);
     } catch (e) {
@@ -139,9 +245,32 @@ export default function App() {
   }
 
   useEffect(() => {
-    void refresh('main');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    async function bootstrap() {
+      setAuthLoading(true);
+      try {
+        const auth = await initAuth();
+        if (cancelled) return;
+        setAuthClient(auth.client);
+        setActor(auth.actor);
+        setIsAuthed(auth.isAuthenticated);
+        setPrincipalText(auth.principalText || '');
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    }
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    if (!actor) return;
+    void refresh('main');
+    void refreshWallet(actor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [actor, isAuthed, authClient]);
 
   useEffect(() => {
     // Provide a sensible default when switching provider.
@@ -151,6 +280,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     async function loadGoogleModels() {
+      if (!actor) return;
       if (provider !== 'google') return;
       if (!apiKey.trim()) {
         setGoogleModels([]);
@@ -159,7 +289,7 @@ export default function App() {
 
       setGoogleModelsLoading(true);
       try {
-        const res = await backend.models_list(providerVariant('google'), apiKey.trim());
+        const res = await actor.models_list(providerVariant('google'), apiKey.trim());
         if (cancelled) return;
         if ('ok' in res) {
           const models = res.ok || [];
@@ -180,17 +310,68 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [provider, apiKey, lang]);
+  }, [provider, apiKey, lang, actor]);
+
+  async function login() {
+    if (!authClient) return;
+    setBusy(true);
+    try {
+      const r = await loginWithII(authClient);
+      setActor(r.actor);
+      setIsAuthed(true);
+      setPrincipalText(r.principalText);
+      setStatus(t.done);
+    } catch (e) {
+      setStatus(`${t.exPrefix}${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logout() {
+    if (!authClient) return;
+    setBusy(true);
+    try {
+      const r = await logoutII(authClient);
+      setActor(r.actor);
+      setIsAuthed(false);
+      setPrincipalText('');
+      setEthWallet('');
+      setStatus(t.done);
+    } catch (e) {
+      setStatus(`${t.exPrefix}${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function openAdminPage() {
     window.location.href = 'admin.html';
   }
 
+  function openWalletPage() {
+    window.location.href = 'wallet.html';
+  }
+
   return (
     <main className="appShell">
       <div className="topBar langToggle">
+        {!authLoading && (
+          isAuthed ? (
+            <button type="button" onClick={() => void logout()} style={{ marginRight: 8 }}>
+              {t.logout}
+            </button>
+          ) : (
+            <button type="button" onClick={() => void login()} style={{ marginRight: 8 }}>
+              {t.login}
+            </button>
+          )
+        )}
         <button type="button" onClick={openAdminPage} style={{ marginRight: 8 }}>
           {t.admin}
+        </button>
+        <button type="button" onClick={openWalletPage} style={{ marginRight: 8 }}>
+          {t.wallet}
         </button>
         <button type="button" onClick={() => setLang((v) => (v === 'zh' ? 'en' : 'zh'))}>
           {t.lang}
@@ -198,6 +379,17 @@ export default function App() {
       </div>
 
       <h2 className="pageTitle">{t.title}</h2>
+
+      <section className="panel" style={{ marginBottom: 12 }}>
+        {authLoading ? (
+          <div className="status">{t.authLoading}</div>
+        ) : (
+          <>
+            <div className="status"><strong>{t.principal}:</strong> {principalText || 'anonymous'}</div>
+            <div className="status"><strong>{t.ethWallet}:</strong> {ethWallet || '-'}</div>
+          </>
+        )}
+      </section>
 
       <section className="panel">
       <div className="row" style={{ margin: '10px 0 14px' }}>

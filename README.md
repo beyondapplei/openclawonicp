@@ -15,6 +15,13 @@
 - LLM：支持 OpenAI / Anthropic 的 HTTPS outcalls（`sessions_send` 内部调用）
 - LLM：支持 OpenAI / Anthropic / Google (Gemini, AI Studio) 的 HTTPS outcalls（`sessions_send` 内部调用）
 - WebChat：网页聊天 UI，可选择 provider/model、填写 API Key、查看历史、重置会话
+- 钱包：主界面“钱包”按钮会打开独立全屏钱包页（`wallet.html`）
+- 钱包：钱包页采用参考 Oisy 的双栏布局（左侧资产与地址、右侧转账卡片）
+- 钱包：支持发送 ETH（Ethereum Mainnet / Base Mainnet）
+	- ETH 发送流程已改为后端执行：后端查 nonce/gas -> 后端签名 -> 后端广播
+- 钱包：支持发送 ICRC1 Token（传入 Ledger Principal + 目标 Principal + amount + 可选 fee）
+- 钱包：支持发送 ERC20（后端构造 `transfer(address,uint256)` 并签名广播）
+- 钱包：支持余额查询（ICP / ICRC1 / ETH / ERC20）
 - 语言切换：右上角按钮切换中文/英文（仅切换界面文案）
 
 ## 目录结构
@@ -26,9 +33,13 @@
 	- Sessions.mo / Skills.mo / Tools.mo：核心业务
 	- Llm.mo：OpenAI/Anthropic 请求构造与 outcall
 	- Json.mo：JSON escape + 定向解析（抽取 content/text）
+	- TokenTransfer.mo：ICRC1/ICP 转账
+	- EthTx.mo：ETH 构造、签名与广播
 - 前端：frontend/
 	- index.html：React 挂载点
+	- wallet.html：钱包全屏页面入口
 	- src/App.jsx：聊天 UI + 中英文切换
+	- src/wallet/WalletApp.jsx：钱包全屏 UI
 
 ## 使用方式
 
@@ -82,6 +93,22 @@
 - tools
 	- `tools_list()`
 	- `tools_invoke(name, args)`
+- wallet
+	- `canister_principal()`
+	- `agent_wallet()`
+	- `wallet_send_icp(toPrincipalText, amountE8s)`
+	- `wallet_send_icrc1(ledgerPrincipalText, toPrincipalText, amount, fee)`
+	- `wallet_send_eth_raw(network, rpcUrl, rawTxHex)`
+	- `wallet_send_eth(network, rpcUrl, toAddress, amountWei)`
+	- `wallet_send_erc20(network, rpcUrl, tokenAddress, toAddress, amount)`
+	- `wallet_balance_icp()`
+	- `wallet_balance_icrc1(ledgerPrincipalText)`
+	- `wallet_balance_eth(network, rpcUrl)`
+	- `wallet_balance_erc20(network, rpcUrl, tokenAddress)`
+	- `ecdsa_public_key(derivationPath, keyName)`
+	- `sign_with_ecdsa(messageHash, derivationPath, keyName)`
+
+说明：`wallet_send_eth` 使用后端 canister 直接调用系统 `ecdsa_public_key/sign_with_ecdsa` 完成签名与广播，不依赖 Chain Fusion Signer；前端关闭后，后端接口仍可由其他调用方触发。
 
 ## Telegram 接入（Bot Webhook）
 
@@ -128,8 +155,10 @@
 ### 1. 多页面前端
 
 - 新增 `admin.html` 管理页面入口。
+- 新增 `wallet.html` 钱包页面入口。
 - 主页面新增“管理界面”按钮，点击后在新页面打开管理页。
-- Vite 配置为多页面构建：同时打包 `index.html` 与 `admin.html`。
+- 主页面“钱包”按钮改为跳转独立钱包页（全屏）。
+- Vite 配置为多页面构建：同时打包 `index.html`、`admin.html`、`wallet.html`。
 
 ### 2. 管理页面（Telegram + LLM）
 
@@ -155,3 +184,14 @@
 - 后端支持查询 Google 可用模型并返回给前端下拉选择。
 - 前端在 Google provider 下自动拉取模型列表，减少手动输入错误。
 - 对 Gemini 模型名做归一化兼容（如 `gemini` -> `gemini-1.5-flash`）。
+
+### 5. Identity + 后端签名钱包
+
+- 前端接入 Internet Identity 登录（II），登录后显示当前 Principal。
+- ETH 地址通过后端调用系统接口 `ecdsa_public_key` 获取公钥并派生地址（前端只做展示）。
+
+### 6. 钱包页布局改造（参考 Oisy）
+
+- 钱包能力从聊天页中拆分，迁移到独立全屏页面。
+- 页面结构改为左侧账户/资产概览 + 右侧分卡片交易区（ICP/ETH/ICRC1/ERC20）。
+- 聊天页仅保留钱包入口与地址概览信息，减少主页面复杂度。

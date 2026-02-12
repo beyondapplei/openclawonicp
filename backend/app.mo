@@ -1,5 +1,7 @@
 import Nat "mo:base/Nat";
+import Nat64 "mo:base/Nat64";
 import Nat16 "mo:base/Nat16";
+import Blob "mo:base/Blob";
 import Principal "mo:base/Principal";
 import Debug "mo:base/Debug";
 import Result "mo:base/Result";
@@ -14,6 +16,9 @@ import Store "./openclaw/Store";
 import Tools "./openclaw/Tools";
 import Telegram "./openclaw/Telegram";
 import Types "./openclaw/Types";
+import Wallet "./openclaw/Wallet";
+import EthTx "./openclaw/EthTx";
+import TokenTransfer "./openclaw/TokenTransfer";
 
 persistent actor OpenClawOnICP {
   // -----------------------------
@@ -30,6 +35,16 @@ persistent actor OpenClawOnICP {
   public type ToolResult = Types.ToolResult;
 
   public type ModelsResult = Result.Result<[Text], Text>;
+  public type SendIcpResult = Result.Result<Nat, Text>;
+  public type SendIcrc1Result = Result.Result<Nat, Text>;
+  public type SendEthResult = Result.Result<Text, Text>;
+  public type BalanceResult = Result.Result<Nat, Text>;
+  public type WalletResult = Wallet.WalletResult;
+  public type EcdsaPublicKeyResult = Wallet.EcdsaPublicKeyResult;
+  public type SignWithEcdsaResult = Wallet.SignWithEcdsaResult;
+  public type AgentWallet = Wallet.AgentWallet;
+  public type EcdsaPublicKeyOut = Wallet.EcdsaPublicKeyOut;
+  public type SignWithEcdsaOut = Wallet.SignWithEcdsaOut;
 
   public type TgStatus = {
     configured : Bool;
@@ -46,6 +61,8 @@ persistent actor OpenClawOnICP {
   type HttpRequestArgs = HttpTypes.HttpRequestArgs;
 
   transient let ic : Llm.Http = actor ("aaaaa-aa");
+  transient let ic00 : Wallet.Ic00 = actor ("aaaaa-aa");
+  transient let icpLedgerPrincipal : Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
 
   // -----------------------------
   // Inbound canister HTTP (for Telegram webhooks)
@@ -85,10 +102,17 @@ persistent actor OpenClawOnICP {
   var tgLlmOpts : ?SendOptions = null;
 
   func assertOwner(caller : Principal) {
+    if (Principal.isAnonymous(caller)) {
+      Debug.trap("login required")
+    };
     switch (owner) {
       case null { owner := ?caller };
       case (?o) { if (o != caller) { Debug.trap("not authorized") } };
     }
+  };
+
+  public query func owner_get() : async ?Principal {
+    owner
   };
 
   public shared ({ caller }) func admin_set_tg(botToken : Text, secretToken : ?Text) : async () {
@@ -112,7 +136,8 @@ persistent actor OpenClawOnICP {
     }
   };
 
-  public shared ({ caller = _ }) func tg_status() : async TgStatus {
+  public shared ({ caller }) func tg_status() : async TgStatus {
+    assertOwner(caller);
     {
       configured = (tgBotToken != null);
       hasSecret = (tgSecretToken != null);
@@ -264,15 +289,138 @@ persistent actor OpenClawOnICP {
 
   func nowNs() : Int { Time.now() };
 
+  public shared ({ caller }) func whoami() : async Text {
+    assertOwner(caller);
+    Principal.toText(caller)
+  };
+
+  public shared ({ caller }) func ecdsa_public_key(derivationPath : [Blob], keyName : ?Text) : async EcdsaPublicKeyResult {
+    assertOwner(caller);
+    await Wallet.ecdsaPublicKey(ic00, caller, Principal.fromActor(OpenClawOnICP), derivationPath, keyName)
+  };
+
+  public shared ({ caller }) func sign_with_ecdsa(messageHash : Blob, derivationPath : [Blob], keyName : ?Text) : async SignWithEcdsaResult {
+    assertOwner(caller);
+    await Wallet.signWithEcdsa(ic00, caller, messageHash, derivationPath, keyName)
+  };
+
+  public shared ({ caller }) func agent_wallet() : async WalletResult {
+    assertOwner(caller);
+    await Wallet.agentWallet(ic00, caller, Principal.fromActor(OpenClawOnICP))
+  };
+
+  public query func canister_principal() : async Principal {
+    Principal.fromActor(OpenClawOnICP)
+  };
+
+  public shared ({ caller }) func wallet_send_icp(toPrincipalText : Text, amountE8s : Nat64) : async SendIcpResult {
+    assertOwner(caller);
+    await TokenTransfer.send(icpLedgerPrincipal, toPrincipalText, Nat64.toNat(amountE8s), null, null, null)
+  };
+
+  public shared ({ caller }) func wallet_send_icrc1(ledgerPrincipalText : Text, toPrincipalText : Text, amount : Nat, fee : ?Nat) : async SendIcrc1Result {
+    assertOwner(caller);
+    let ledgerPrincipal : Principal = try {
+      Principal.fromText(Text.trim(ledgerPrincipalText, #char ' '))
+    } catch (_) {
+      return #err("invalid ledger principal")
+    };
+    await TokenTransfer.send(ledgerPrincipal, toPrincipalText, amount, fee, null, null)
+  };
+
+  public shared ({ caller }) func wallet_balance_icp() : async BalanceResult {
+    assertOwner(caller);
+    await TokenTransfer.balance(icpLedgerPrincipal, Principal.fromActor(OpenClawOnICP))
+  };
+
+  public shared ({ caller }) func wallet_balance_icrc1(ledgerPrincipalText : Text) : async BalanceResult {
+    assertOwner(caller);
+    let ledgerPrincipal : Principal = try {
+      Principal.fromText(Text.trim(ledgerPrincipalText, #char ' '))
+    } catch (_) {
+      return #err("invalid ledger principal")
+    };
+    await TokenTransfer.balance(ledgerPrincipal, Principal.fromActor(OpenClawOnICP))
+  };
+
+  public shared ({ caller }) func wallet_send_eth_raw(network : Text, rpcUrl : ?Text, rawTxHex : Text) : async SendEthResult {
+    assertOwner(caller);
+    await EthTx.sendRaw(ic, http_transform, defaultHttpCycles, network, rpcUrl, rawTxHex)
+  };
+
+  public shared ({ caller }) func wallet_send_eth(network : Text, rpcUrl : ?Text, toAddress : Text, amountWei : Nat) : async SendEthResult {
+    assertOwner(caller);
+    await EthTx.send(
+      ic,
+      http_transform,
+      defaultHttpCycles,
+      ic00,
+      caller,
+      Principal.fromActor(OpenClawOnICP),
+      network,
+      rpcUrl,
+      toAddress,
+      amountWei,
+    )
+  };
+
+  public shared ({ caller }) func wallet_send_erc20(network : Text, rpcUrl : ?Text, tokenAddress : Text, toAddress : Text, amount : Nat) : async SendEthResult {
+    assertOwner(caller);
+    await EthTx.sendErc20(
+      ic,
+      http_transform,
+      defaultHttpCycles,
+      ic00,
+      caller,
+      Principal.fromActor(OpenClawOnICP),
+      network,
+      rpcUrl,
+      tokenAddress,
+      toAddress,
+      amount,
+    )
+  };
+
+  public shared ({ caller }) func wallet_balance_eth(network : Text, rpcUrl : ?Text) : async BalanceResult {
+    assertOwner(caller);
+    await EthTx.balanceEth(
+      ic,
+      http_transform,
+      defaultHttpCycles,
+      ic00,
+      caller,
+      Principal.fromActor(OpenClawOnICP),
+      network,
+      rpcUrl,
+    )
+  };
+
+  public shared ({ caller }) func wallet_balance_erc20(network : Text, rpcUrl : ?Text, tokenAddress : Text) : async BalanceResult {
+    assertOwner(caller);
+    await EthTx.balanceErc20(
+      ic,
+      http_transform,
+      defaultHttpCycles,
+      ic00,
+      caller,
+      Principal.fromActor(OpenClawOnICP),
+      network,
+      rpcUrl,
+      tokenAddress,
+    )
+  };
+
   // -----------------------------
   // sessions_* (openclaw-like)
   // -----------------------------
 
   public shared ({ caller }) func sessions_create(sessionId : Text) : async () {
+    assertOwner(caller);
     Sessions.create(users, caller, sessionId, nowNs);
   };
 
   public shared ({ caller }) func sessions_reset(sessionId : Text) : async () {
+    assertOwner(caller);
     Sessions.reset(users, caller, sessionId, nowNs);
   };
 
@@ -284,11 +432,13 @@ persistent actor OpenClawOnICP {
   };
 
   public shared ({ caller }) func sessions_list() : async [SessionSummary] {
+    assertOwner(caller);
     let u = Store.getOrInitUser(users, caller);
     Sessions.list(u)
   };
 
   public shared ({ caller }) func sessions_history(sessionId : Text, limit : Nat) : async [ChatMessage] {
+    assertOwner(caller);
     let u = Store.getOrInitUser(users, caller);
     Sessions.history(u, sessionId, limit, nowNs)
   };
@@ -296,7 +446,8 @@ persistent actor OpenClawOnICP {
   transient let defaultHttpCycles : Nat = 30_000_000_000;
 
   // Model discovery (for UI dropdowns)
-  public shared ({ caller = _ }) func models_list(provider : Provider, apiKey : Text) : async ModelsResult {
+  public shared ({ caller }) func models_list(provider : Provider, apiKey : Text) : async ModelsResult {
+    assertOwner(caller);
     if (Text.size(Text.trim(apiKey, #char ' ')) == 0) return #err("apiKey is required");
     await Llm.listModels(ic, http_transform, defaultHttpCycles, provider, apiKey)
   };
@@ -314,6 +465,7 @@ persistent actor OpenClawOnICP {
   };
 
   public shared ({ caller }) func sessions_send(sessionId : Text, message : Text, opts : SendOptions) : async SendResult {
+    assertOwner(caller);
     await Sessions.send(users, caller, sessionId, message, opts, nowNs, modelCaller)
   };
 
@@ -322,21 +474,25 @@ persistent actor OpenClawOnICP {
   // -----------------------------
 
   public shared ({ caller }) func skills_put(name : Text, markdown : Text) : async () {
+    assertOwner(caller);
     let u = Store.getOrInitUser(users, caller);
     Skills.put(u, name, markdown, nowNs);
   };
 
   public shared ({ caller }) func skills_get(name : Text) : async ?Text {
+    assertOwner(caller);
     let u = Store.getOrInitUser(users, caller);
     Skills.get(u, name)
   };
 
   public shared ({ caller }) func skills_list() : async [Text] {
+    assertOwner(caller);
     let u = Store.getOrInitUser(users, caller);
     Skills.list(u)
   };
 
   public shared ({ caller }) func skills_delete(name : Text) : async Bool {
+    assertOwner(caller);
     let u = Store.getOrInitUser(users, caller);
     Skills.delete(u, name)
   };
@@ -345,11 +501,13 @@ persistent actor OpenClawOnICP {
   // tools_* (very limited, chain-safe)
   // -----------------------------
 
-  public shared ({ caller = _ }) func tools_list() : async [Text] {
+  public shared ({ caller }) func tools_list() : async [Text] {
+    assertOwner(caller);
     Tools.list()
   };
 
   public shared ({ caller }) func tools_invoke(name : Text, args : [Text]) : async ToolResult {
+    assertOwner(caller);
     let u = Store.getOrInitUser(users, caller);
     Tools.invoke(u, name, args, nowNs)
   };

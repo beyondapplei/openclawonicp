@@ -1,3 +1,8 @@
+type WalletResult = 
+ variant {
+   err: text;
+   ok: AgentWallet;
+ };
 type TransformArgs = 
  record {
    context: blob;
@@ -13,6 +18,20 @@ type TgStatus =
    configured: bool;
    hasLlmConfig: bool;
    hasSecret: bool;
+ };
+type SignWithEcdsaResult = 
+ variant {
+   err: text;
+   ok: SignWithEcdsaOut;
+ };
+type SignWithEcdsaOut = 
+ record {
+   derivationPathHex: vec text;
+   keyName: text;
+   messageHashHex: text;
+   "principal": principal;
+   principalText: text;
+   signatureHex: text;
  };
 type SessionSummary = 
  record {
@@ -40,6 +59,21 @@ type SendOk =
  record {
    assistant: ChatMessage;
    raw: opt text;
+ };
+type SendIcrc1Result = 
+ variant {
+   err: text;
+   ok: nat;
+ };
+type SendIcpResult = 
+ variant {
+   err: text;
+   ok: nat;
+ };
+type SendEthResult = 
+ variant {
+   err: text;
+   ok: text;
  };
 type Role = 
  variant {
@@ -100,20 +134,53 @@ type HeaderField =
    text;
    text;
  };
+type EcdsaPublicKeyResult = 
+ variant {
+   err: text;
+   ok: EcdsaPublicKeyOut;
+ };
+type EcdsaPublicKeyOut = 
+ record {
+   chainCodeHex: text;
+   derivationPathHex: vec text;
+   keyName: text;
+   "principal": principal;
+   principalText: text;
+   publicKeyHex: text;
+ };
 type ChatMessage = 
  record {
    content: text;
    role: Role;
    tsNs: int;
  };
+type BalanceResult = 
+ variant {
+   err: text;
+   ok: nat;
+ };
+type AgentWallet = 
+ record {
+   chainCodeHex: text;
+   derivationPathHex: vec text;
+   keyName: text;
+   "principal": principal;
+   principalText: text;
+   publicKeyHex: text;
+ };
 service : {
   admin_set_llm_opts: (opts: SendOptions) -> ();
   admin_set_tg: (botToken: text, secretToken: opt text) -> ();
   admin_tg_set_webhook: (webhookUrl: text) -> (Result);
+  agent_wallet: () -> (WalletResult);
+  canister_principal: () -> (principal) query;
+  ecdsa_public_key: (derivationPath: vec blob, keyName: opt text) ->
+   (EcdsaPublicKeyResult);
   http_request: (req: InHttpRequest) -> (InHttpResponse) query;
   http_request_update: (req: InHttpRequest) -> (InHttpResponse);
   http_transform: (args: TransformArgs) -> (HttpResponsePayload) query;
   models_list: (provider: Provider, apiKey: text) -> (ModelsResult);
+  owner_get: () -> (opt principal) query;
   sessions_create: (sessionId: text) -> ();
   sessions_history: (sessionId: text, limit: nat) -> (vec ChatMessage);
   sessions_list: () -> (vec SessionSummary);
@@ -121,6 +188,8 @@ service : {
   sessions_reset: (sessionId: text) -> ();
   sessions_send: (sessionId: text, message: text, opts: SendOptions) ->
    (SendResult);
+  sign_with_ecdsa: (messageHash: blob, derivationPath: vec blob, keyName:
+   opt text) -> (SignWithEcdsaResult);
   skills_delete: (name: text) -> (bool);
   skills_get: (name: text) -> (opt text);
   skills_list: () -> (vec text);
@@ -128,4 +197,20 @@ service : {
   tg_status: () -> (TgStatus);
   tools_invoke: (name: text, args: vec text) -> (ToolResult);
   tools_list: () -> (vec text);
+  wallet_balance_erc20: (network: text, rpcUrl: opt text, tokenAddress:
+   text) -> (BalanceResult);
+  wallet_balance_eth: (network: text, rpcUrl: opt text) -> (BalanceResult);
+  wallet_balance_icp: () -> (BalanceResult);
+  wallet_balance_icrc1: (ledgerPrincipalText: text) -> (BalanceResult);
+  wallet_send_erc20: (network: text, rpcUrl: opt text, tokenAddress: 
+   text, toAddress: text, amount: nat) -> (SendEthResult);
+  wallet_send_eth: (network: text, rpcUrl: opt text, toAddress: text,
+   amountWei: nat) -> (SendEthResult);
+  wallet_send_eth_raw: (network: text, rpcUrl: opt text, rawTxHex: text) ->
+   (SendEthResult);
+  wallet_send_icp: (toPrincipalText: text, amountE8s: nat64) ->
+   (SendIcpResult);
+  wallet_send_icrc1: (ledgerPrincipalText: text, toPrincipalText: text,
+   amount: nat, fee: opt nat) -> (SendIcrc1Result);
+  whoami: () -> (text);
 }

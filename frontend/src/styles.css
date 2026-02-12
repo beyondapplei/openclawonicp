@@ -163,3 +163,170 @@ button:disabled {
   border-color: var(--accent2);
   box-shadow: 0 0 0 2px rgba(102, 246, 255, 0.12);
 }
+
+body.walletFullscreenBody {
+  padding: 0;
+}
+
+.walletPage {
+  min-height: 100vh;
+  width: 100%;
+  padding: 24px;
+}
+
+.walletHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.walletHeader h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.walletHeader p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.walletHeaderActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.walletLayout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.walletSidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.walletField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.walletField span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.walletField strong {
+  color: var(--text);
+  word-break: break-all;
+  font-size: 13px;
+}
+
+.walletBalanceHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.walletBalanceHeader h3 {
+  margin: 0;
+}
+
+.walletBalances {
+  display: grid;
+  gap: 8px;
+}
+
+.walletBalances > div {
+  border: 1px solid rgba(141, 183, 255, 0.2);
+  background: rgba(6, 14, 34, 0.68);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.walletBalances span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.walletMain {
+  display: grid;
+  gap: 12px;
+}
+
+.walletCard {
+  display: grid;
+  gap: 10px;
+}
+
+.walletCard h3 {
+  margin: 0;
+}
+
+.walletGrid2,
+.walletGrid3 {
+  display: grid;
+  gap: 8px;
+}
+
+.walletGrid2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.walletGrid3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.walletActionRow {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.walletFooter {
+  margin-top: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.walletFooter span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 1080px) {
+  .walletLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .walletGrid3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .walletPage {
+    padding: 14px;
+  }
+
+  .walletHeader {
+    flex-direction: column;
+  }
+
+  .walletGrid2 {
+    grid-template-columns: 1fr;
+  }
+
+  .walletActionRow {
+    grid-template-columns: 1fr;
+  }
+}

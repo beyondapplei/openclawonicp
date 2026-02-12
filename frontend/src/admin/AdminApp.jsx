@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { backend } from 'declarations/backend';
+import React, { useEffect, useMemo, useState } from 'react';
+import { initAuth, loginWithII, logoutII } from '../auth';
 
 const I18N = {
   zh: {
@@ -34,6 +34,10 @@ const I18N = {
     errPrefix: '错误：',
     exPrefix: '异常：',
     required: '请填写必填项',
+    login: 'Identity 登录',
+    logout: '退出登录',
+    principal: 'Principal',
+    authLoading: '身份初始化中…',
   },
   en: {
     title: 'Telegram Admin',
@@ -67,6 +71,10 @@ const I18N = {
     errPrefix: 'Error: ',
     exPrefix: 'Exception: ',
     required: 'Please fill required fields',
+    login: 'Login with Identity',
+    logout: 'Logout',
+    principal: 'Principal',
+    authLoading: 'Initializing identity…',
   },
 };
 
@@ -79,6 +87,12 @@ function providerVariant(provider) {
 export default function AdminApp() {
   const [lang, setLang] = useState('zh');
   const t = useMemo(() => I18N[lang] ?? I18N.zh, [lang]);
+
+  const [authClient, setAuthClient] = useState(null);
+  const [actor, setActor] = useState(null);
+  const [isAuthed, setIsAuthed] = useState(false);
+  const [principalText, setPrincipalText] = useState('');
+  const [authLoading, setAuthLoading] = useState(true);
 
   const [status, setStatus] = useState('');
   const [tgStatus, setTgStatus] = useState(null);
@@ -100,10 +114,64 @@ export default function AdminApp() {
 
   const [busy, setBusy] = useState(false);
 
-  async function refreshStatus() {
+  useEffect(() => {
+    let cancelled = false;
+    async function bootstrap() {
+      setAuthLoading(true);
+      try {
+        const auth = await initAuth();
+        if (cancelled) return;
+        setAuthClient(auth.client);
+        setActor(auth.actor);
+        setIsAuthed(auth.isAuthenticated);
+        setPrincipalText(auth.principalText || '');
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    }
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function login() {
+    if (!authClient) return;
     setBusy(true);
     try {
-      const s = await backend.tg_status();
+      const r = await loginWithII(authClient);
+      setActor(r.actor);
+      setIsAuthed(true);
+      setPrincipalText(r.principalText);
+      setStatus(t.ok);
+    } catch (e) {
+      setStatus(`${t.exPrefix}${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function logout() {
+    if (!authClient) return;
+    setBusy(true);
+    try {
+      const r = await logoutII(authClient);
+      setActor(r.actor);
+      setIsAuthed(false);
+      setPrincipalText('');
+      setStatus(t.ok);
+    } catch (e) {
+      setStatus(`${t.exPrefix}${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshStatus() {
+    if (!actor) return;
+    setBusy(true);
+    try {
+      const s = await actor.tg_status();
       setTgStatus(s);
       setStatus(t.ok);
     } catch (e) {
@@ -114,13 +182,14 @@ export default function AdminApp() {
   }
 
   async function saveTgConfig() {
+    if (!actor) return;
     if (!botToken.trim()) {
       setStatus(t.required);
       return;
     }
     setBusy(true);
     try {
-      await backend.admin_set_tg(botToken.trim(), secretToken.trim() ? [secretToken.trim()] : []);
+      await actor.admin_set_tg(botToken.trim(), secretToken.trim() ? [secretToken.trim()] : []);
       setStatus(t.ok);
       await refreshStatus();
     } catch (e) {
@@ -130,13 +199,14 @@ export default function AdminApp() {
   }
 
   async function saveLlmConfig() {
+    if (!actor) return;
     if (!model.trim() || !apiKey.trim()) {
       setStatus(t.required);
       return;
     }
     setBusy(true);
     try {
-      await backend.admin_set_llm_opts({
+      await actor.admin_set_llm_opts({
         provider: providerVariant(provider),
         model: model.trim(),
         apiKey: apiKey.trim(),
@@ -155,13 +225,14 @@ export default function AdminApp() {
   }
 
   async function setWebhook() {
+    if (!actor) return;
     if (!webhookUrl.trim()) {
       setStatus(t.required);
       return;
     }
     setBusy(true);
     try {
-      const res = await backend.admin_tg_set_webhook(webhookUrl.trim());
+      const res = await actor.admin_tg_set_webhook(webhookUrl.trim());
       if ('ok' in res) {
         setStatus(t.ok);
       } else {
@@ -175,9 +246,10 @@ export default function AdminApp() {
   }
 
   async function loadSkills() {
+    if (!actor) return;
     setBusy(true);
     try {
-      const list = await backend.skills_list();
+      const list = await actor.skills_list();
       setSkills(list);
       setSelectedSkill('');
       setSkillDetail('');
@@ -190,9 +262,10 @@ export default function AdminApp() {
   }
 
   async function loadSkillDetail(name) {
+    if (!actor) return;
     setBusy(true);
     try {
-      const detail = await backend.skills_get(name);
+      const detail = await actor.skills_get(name);
       setSelectedSkill(name);
       setSkillDetail(detail?.[0] ?? '');
       setStatus(t.ok);
@@ -206,6 +279,17 @@ export default function AdminApp() {
   return (
     <main className="appShell">
       <div className="topBar langToggle">
+        {!authLoading && (
+          isAuthed ? (
+            <button type="button" onClick={() => void logout()} style={{ marginRight: 8 }}>
+              {t.logout}
+            </button>
+          ) : (
+            <button type="button" onClick={() => void login()} style={{ marginRight: 8 }}>
+              {t.login}
+            </button>
+          )
+        )}
         <button type="button" onClick={() => (window.location.href = './')} style={{ marginRight: 8 }}>
           {t.back}
         </button>
@@ -215,6 +299,14 @@ export default function AdminApp() {
       </div>
 
       <h2 className="pageTitle">{t.title}</h2>
+
+      <section className="panel" style={{ marginBottom: 16 }}>
+        {authLoading ? (
+          <div className="status">{t.authLoading}</div>
+        ) : (
+          <div className="status"><strong>{t.principal}:</strong> {principalText || 'anonymous'}</div>
+        )}
+      </section>
 
       <section className="panel" style={{ marginBottom: 16 }}>
         <h3>{t.status}</h3>
