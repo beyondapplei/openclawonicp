@@ -6,6 +6,14 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   base: './',
   plugins: [react(), environment('all', { prefix: 'CANISTER_' }), environment('all', { prefix: 'DFX_' })],
+  build: {
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        admin: fileURLToPath(new URL('./admin.html', import.meta.url))
+      }
+    }
+  },
   envDir: '../',
   define: {
     'process.env': process.env

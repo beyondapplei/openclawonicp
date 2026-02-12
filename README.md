@@ -122,3 +122,36 @@
 - 后端按模块拆分到 backend/openclaw/，主入口 backend/app.mo 仅负责组装与对外导出
 - 前端从纯 HTML/JS 重写为 Vite + React，并加入右上角中英文切换
 - 构建流程：`npm run build` 会先 `dfx generate backend` 再 `vite build` 产出 frontend/dist
+
+## 最近更新（详细）
+
+### 1. 多页面前端
+
+- 新增 `admin.html` 管理页面入口。
+- 主页面新增“管理界面”按钮，点击后在新页面打开管理页。
+- Vite 配置为多页面构建：同时打包 `index.html` 与 `admin.html`。
+
+### 2. 管理页面（Telegram + LLM）
+
+- 管理页支持调用以下后端管理接口：
+	- `tg_status`
+	- `admin_set_tg`
+	- `admin_set_llm_opts`
+	- `admin_tg_set_webhook`
+- 支持配置并保存：
+	- Telegram Bot Token
+	- Secret Token（可选）
+	- 默认 LLM provider/model/apiKey/system prompt
+	- Webhook URL
+
+### 3. 管理页技能查看
+
+- 新增“加载后端技能”按钮，调用 `skills_list` 获取技能名列表。
+- 列表项可点击，调用 `skills_get(name)` 获取技能详情。
+- 详情在管理页文本区域中展示，便于查看已存储技能内容。
+
+### 4. Gemini 模型与可用性改进
+
+- 后端支持查询 Google 可用模型并返回给前端下拉选择。
+- 前端在 Google provider 下自动拉取模型列表，减少手动输入错误。
+- 对 Gemini 模型名做归一化兼容（如 `gemini` -> `gemini-1.5-flash`）。

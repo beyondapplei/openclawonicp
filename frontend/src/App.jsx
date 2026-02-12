@@ -23,6 +23,7 @@ const I18N = {
     needKey: 'apiKey 不能为空',
     needMsg: 'message 不能为空',
     lang: 'English',
+    admin: '管理界面',
   },
   en: {
     title: 'OpenClaw on ICP (minimal)',
@@ -45,6 +46,7 @@ const I18N = {
     needKey: 'API key is required',
     needMsg: 'Message is required',
     lang: '中文',
+    admin: 'Admin',
   },
 };
 
@@ -180,9 +182,16 @@ export default function App() {
     };
   }, [provider, apiKey, lang]);
 
+  function openAdminPage() {
+    window.open('admin.html', '_blank', 'noopener,noreferrer');
+  }
+
   return (
     <main>
       <div className="langToggle">
+        <button type="button" onClick={openAdminPage} style={{ marginRight: 8 }}>
+          {t.admin}
+        </button>
         <button type="button" onClick={() => setLang((v) => (v === 'zh' ? 'en' : 'zh'))}>
           {t.lang}
         </button>
