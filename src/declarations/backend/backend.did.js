@@ -111,6 +111,7 @@ export const idlFactory = ({ IDL }) => {
   });
   const ToolResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const BalanceResult = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
+  const EthAddressResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const SendEthResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const SendIcpResult = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
   const SendIcrc1Result = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
@@ -176,6 +177,7 @@ export const idlFactory = ({ IDL }) => {
       ),
     'wallet_balance_icp' : IDL.Func([], [BalanceResult], []),
     'wallet_balance_icrc1' : IDL.Func([IDL.Text], [BalanceResult], []),
+    'wallet_eth_address' : IDL.Func([], [EthAddressResult], []),
     'wallet_send_erc20' : IDL.Func(
         [IDL.Text, IDL.Opt(IDL.Text), IDL.Text, IDL.Text, IDL.Nat],
         [SendEthResult],

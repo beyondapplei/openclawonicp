@@ -134,6 +134,11 @@ type HeaderField =
    text;
    text;
  };
+type EthAddressResult = 
+ variant {
+   err: text;
+   ok: text;
+ };
 type EcdsaPublicKeyResult = 
  variant {
    err: text;
@@ -202,6 +207,7 @@ service : {
   wallet_balance_eth: (network: text, rpcUrl: opt text) -> (BalanceResult);
   wallet_balance_icp: () -> (BalanceResult);
   wallet_balance_icrc1: (ledgerPrincipalText: text) -> (BalanceResult);
+  wallet_eth_address: () -> (EthAddressResult);
   wallet_send_erc20: (network: text, rpcUrl: opt text, tokenAddress: 
    text, toAddress: text, amount: nat) -> (SendEthResult);
   wallet_send_eth: (network: text, rpcUrl: opt text, toAddress: text,

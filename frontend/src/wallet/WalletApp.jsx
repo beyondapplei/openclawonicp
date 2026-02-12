@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { computeAddress, parseEther } from 'ethers';
+import { parseEther } from 'ethers';
 import { initAuth, loginWithII, logoutII } from '../auth';
 
 const I18N = {
@@ -50,6 +50,7 @@ const I18N = {
     needEthTo: 'ETH 目标地址不能为空',
     needEthAmount: 'ETH 数量必须大于 0',
     status: '状态',
+    notOwnerLogin: '不是 agent 的拥有者，不能登录',
   },
   en: {
     title: 'Wallet',
@@ -98,6 +99,7 @@ const I18N = {
     needEthTo: 'ETH destination is required',
     needEthAmount: 'ETH amount must be greater than 0',
     status: 'Status',
+    notOwnerLogin: 'Not the agent owner. Login denied.',
   },
 };
 
@@ -113,7 +115,6 @@ export default function WalletApp() {
   const [ethWallet, setEthWallet] = useState('');
   const [authLoading, setAuthLoading] = useState(true);
   const [ownerPrincipalText, setOwnerPrincipalText] = useState('');
-  const [accessLocked, setAccessLocked] = useState(false);
 
   const [sendToPrincipal, setSendToPrincipal] = useState('');
   const [sendAmountE8s, setSendAmountE8s] = useState('');
@@ -141,25 +142,34 @@ export default function WalletApp() {
     return String(p);
   }
 
-  async function refreshOwnerAccess(a, principalHint = '') {
+  async function refreshOwnerAccess(a, principalHint = '', client = authClient) {
     if (!a) {
       setOwnerPrincipalText('');
-      setAccessLocked(false);
       return;
     }
     try {
+      if (principalHint.trim()) {
+        const me = await a.whoami();
+        setOwnerPrincipalText(principalToText(me));
+        return;
+      }
       const ownerRes = await a.owner_get();
       const ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
       setOwnerPrincipalText(ownerText);
-      if (!ownerText) {
-        setAccessLocked(false);
+    } catch (_) {
+      if (principalHint.trim()) {
+        if (client) {
+          const logoutRes = await logoutII(client);
+          setActor(logoutRes.actor);
+        }
+        setIsAuthed(false);
+        setPrincipalText('');
+        setCanisterPrincipalText('');
+        setEthWallet('');
+        setStatus(t.notOwnerLogin);
         return;
       }
-      const me = (principalHint || principalText || '').trim();
-      setAccessLocked(me !== ownerText);
-    } catch (_) {
       setOwnerPrincipalText('');
-      setAccessLocked(false);
     }
   }
 
@@ -178,11 +188,31 @@ export default function WalletApp() {
         const auth = await initAuth();
         if (cancelled) return;
         setAuthClient(auth.client);
-        setActor(auth.actor);
-        setIsAuthed(auth.isAuthenticated);
-        const pText = auth.principalText || '';
-        setPrincipalText(pText);
-        await refreshOwnerAccess(auth.actor, pText);
+        if (auth.isAuthenticated && auth.actor && auth.principalText) {
+          try {
+            const ownerText = await auth.actor.whoami();
+            if (cancelled) return;
+            setActor(auth.actor);
+            setIsAuthed(true);
+            setPrincipalText(auth.principalText);
+            setOwnerPrincipalText(principalToText(ownerText));
+          } catch (_) {
+            const logoutRes = await logoutII(auth.client);
+            if (cancelled) return;
+            setActor(logoutRes.actor);
+            setIsAuthed(false);
+            setPrincipalText('');
+            setOwnerPrincipalText('');
+            setCanisterPrincipalText('');
+            setEthWallet('');
+            setStatus(t.notOwnerLogin);
+          }
+        } else {
+          setActor(auth.actor);
+          setIsAuthed(false);
+          setPrincipalText('');
+          await refreshOwnerAccess(auth.actor, '', auth.client);
+        }
       } finally {
         if (!cancelled) setAuthLoading(false);
       }
@@ -206,31 +236,24 @@ export default function WalletApp() {
     try {
       const r = await loginWithII(authClient);
 
-      const ownerRes = await r.actor.owner_get();
-      let ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
-      if (!ownerText) {
+      try {
         await r.actor.whoami();
-        ownerText = r.principalText;
-      }
-
-      if (ownerText !== r.principalText) {
+      } catch (_) {
         const logoutRes = await logoutII(authClient);
         setActor(logoutRes.actor);
         setIsAuthed(false);
         setPrincipalText('');
         setCanisterPrincipalText('');
         setEthWallet('');
-        setOwnerPrincipalText(ownerText);
-        setAccessLocked(true);
-        setStatus('');
+        setOwnerPrincipalText('');
+        setStatus(t.notOwnerLogin);
         return;
       }
 
       setActor(r.actor);
       setIsAuthed(true);
       setPrincipalText(r.principalText);
-      setOwnerPrincipalText(ownerText);
-      setAccessLocked(false);
+      setOwnerPrincipalText(r.principalText);
       setStatus(t.done);
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
@@ -272,11 +295,9 @@ export default function WalletApp() {
       const p = await a.canister_principal();
       setCanisterPrincipalText(String(p));
 
-      const res = await a.agent_wallet();
+      const res = await a.wallet_eth_address();
       if ('ok' in res) {
-        const pubHex = `0x${res.ok.publicKeyHex}`;
-        const addr = computeAddress(pubHex);
-        setEthWallet(addr);
+        setEthWallet(String(res.ok));
       } else {
         setStatus(`${t.errPrefix}${res.err}`);
       }
@@ -297,7 +318,12 @@ export default function WalletApp() {
     setBusy(true);
     try {
       const icpRes = await a.wallet_balance_icp();
-      if ('ok' in icpRes) setBalIcp(icpRes.ok.toString());
+      if ('ok' in icpRes) {
+        setBalIcp(icpRes.ok.toString());
+      } else {
+        setBalIcp('-');
+        setStatus(`${t.errPrefix}${icpRes.err}`);
+      }
 
       const ethRes = await a.wallet_balance_eth(ethNetwork, ethRpcUrl.trim() ? [ethRpcUrl.trim()] : []);
       if ('ok' in ethRes) setBalEth(ethRes.ok.toString());
@@ -480,21 +506,16 @@ export default function WalletApp() {
     }
   }
 
-  const showLoginOnly = !authLoading && !isAuthed && !accessLocked && !ownerPrincipalText;
-  const showLockedBlank = !authLoading && !isAuthed && accessLocked;
-
-  if (showLockedBlank) {
-    return <main className="appShell" />;
-  }
+  const canAccess = !!(isAuthed && principalText && ownerPrincipalText && principalText === ownerPrincipalText);
+  const showLoginOnly = !authLoading && !canAccess;
 
   if (showLoginOnly) {
     return (
-      <main className="appShell">
-        <div className="topBar langToggle">
-          <button type="button" onClick={() => void login()} disabled={busy}>
-            {t.login}
-          </button>
-        </div>
+      <main className="loginGate">
+        <button className="loginGateButton" type="button" onClick={() => void login()} disabled={busy}>
+          {t.login}
+        </button>
+        {status ? <div className="loginGateStatus">{status}</div> : null}
       </main>
     );
   }
@@ -525,7 +546,6 @@ export default function WalletApp() {
             <div className="status">{t.authLoading}</div>
           ) : (
             <>
-              <div className="walletField"><span>{t.principal}</span><strong>{principalText || 'anonymous'}</strong></div>
               <div className="walletField"><span>{t.icpRecv}</span><strong>{canisterPrincipalText || '-'}</strong></div>
               <div className="walletField"><span>{t.ethWallet}</span><strong>{ethWallet || '-'}</strong></div>
             </>

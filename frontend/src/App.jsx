@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { computeAddress } from 'ethers';
 import { initAuth, loginWithII, logoutII } from './auth';
 
 const I18N = {
@@ -29,6 +28,7 @@ const I18N = {
     logout: '退出登录',
     wallet: '钱包',
     principal: 'Principal',
+    canisterId: '后端 Canister ID',
     icpRecv: 'ICP 接受地址',
     ethWallet: 'Agent ETH 钱包',
     toPrincipal: '目标 Principal',
@@ -63,6 +63,7 @@ const I18N = {
     needEthTo: 'ETH 目标地址不能为空',
     needEthAmount: 'ETH 数量必须大于 0',
     authLoading: '身份初始化中…',
+    notOwnerLogin: '不是 agent 的拥有者，不能登录',
   },
   en: {
     title: 'OpenClaw on ICP (minimal)',
@@ -90,6 +91,7 @@ const I18N = {
     logout: 'Logout',
     wallet: 'Wallet',
     principal: 'Principal',
+    canisterId: 'Backend Canister ID',
     icpRecv: 'ICP Receive Address',
     ethWallet: 'Agent ETH Wallet',
     toPrincipal: 'To Principal',
@@ -124,6 +126,7 @@ const I18N = {
     needEthTo: 'ETH destination is required',
     needEthAmount: 'ETH amount must be greater than 0',
     authLoading: 'Initializing identity…',
+    notOwnerLogin: 'Not the agent owner. Login denied.',
   },
 };
 
@@ -140,6 +143,7 @@ function toMs(tsNs) {
 }
 
 export default function App() {
+  const SESSION_ID = 'main';
   const [lang, setLang] = useState('zh');
   const t = useMemo(() => I18N[lang] ?? I18N.zh, [lang]);
 
@@ -147,12 +151,10 @@ export default function App() {
   const [actor, setActor] = useState(null);
   const [isAuthed, setIsAuthed] = useState(false);
   const [principalText, setPrincipalText] = useState('');
-  const [ethWallet, setEthWallet] = useState('');
+  const [canisterIdText, setCanisterIdText] = useState('');
   const [authLoading, setAuthLoading] = useState(true);
   const [ownerPrincipalText, setOwnerPrincipalText] = useState('');
-  const [accessLocked, setAccessLocked] = useState(false);
 
-  const [sessionId, setSessionId] = useState('main');
   const [provider, setProvider] = useState('openai');
   const [model, setModel] = useState('gpt-4o-mini');
   const [apiKey, setApiKey] = useState('');
@@ -171,58 +173,56 @@ export default function App() {
     return String(p);
   }
 
-  async function refreshOwnerAccess(a, principalHint = '') {
+  async function refreshOwnerAccess(a, principalHint = '', client = authClient) {
     if (!a) {
       setOwnerPrincipalText('');
-      setAccessLocked(false);
       return;
     }
     try {
+      if (principalHint.trim()) {
+        const me = await a.whoami();
+        setOwnerPrincipalText(principalToText(me));
+        return;
+      }
       const ownerRes = await a.owner_get();
       const ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
       setOwnerPrincipalText(ownerText);
-      if (!ownerText) {
-        setAccessLocked(false);
+    } catch (e) {
+      if (principalHint.trim()) {
+        if (client) {
+          const logoutRes = await logoutII(client);
+          setActor(logoutRes.actor);
+        }
+        setIsAuthed(false);
+        setPrincipalText('');
+        setCanisterIdText('');
+        setStatus(t.notOwnerLogin);
         return;
       }
-      const me = (principalHint || principalText || '').trim();
-      setAccessLocked(me !== ownerText);
-    } catch (_) {
       setOwnerPrincipalText('');
-      setAccessLocked(false);
     }
   }
 
   async function refreshWallet(a = actor) {
     if (!a || !isAuthed) {
-      setEthWallet('');
+      setCanisterIdText('');
       return;
     }
     try {
-      const res = await a.agent_wallet();
-      if ('ok' in res) {
-        const pubHex = `0x${res.ok.publicKeyHex}`;
-        const addr = computeAddress(pubHex);
-        setEthWallet(addr);
-      } else {
-        setStatus(`${t.errPrefix}${res.err}`);
-      }
+      const cid = await a.canister_principal();
+      setCanisterIdText(String(cid));
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
     }
   }
 
-  async function refresh(nextSessionId = sessionId) {
+  async function refresh() {
     if (!actor) return;
-    const sid = (nextSessionId || 'main').trim() || 'main';
-    setSessionId(sid);
-    const h = await actor.sessions_history(sid, 50);
+    const h = await actor.sessions_history(SESSION_ID, 50);
     setHistory(h);
   }
 
   async function sendMessage() {
-    const sid = (sessionId || 'main').trim() || 'main';
-
     if (!model.trim()) return setStatus(t.needModel);
     if (!apiKey.trim()) return setStatus(t.needKey);
     if (!message.trim()) return setStatus(t.needMsg);
@@ -243,10 +243,10 @@ export default function App() {
 
     try {
       if (!actor) throw new Error('backend actor not ready');
-      const res = await actor.sessions_send(sid, message, opts);
+      const res = await actor.sessions_send(SESSION_ID, message, opts);
       if ('ok' in res) {
         setMessage('');
-        await refresh(sid);
+        await refresh();
         setStatus(t.done);
       } else {
         setStatus(`${t.errPrefix}${res.err}`);
@@ -259,13 +259,12 @@ export default function App() {
   }
 
   async function resetSession() {
-    const sid = (sessionId || 'main').trim() || 'main';
     setBusy(true);
     setStatus(t.resetIng);
     try {
       if (!actor) throw new Error('backend actor not ready');
-      await actor.sessions_reset(sid);
-      await refresh(sid);
+      await actor.sessions_reset(SESSION_ID);
+      await refresh();
       setStatus(t.resetDone);
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
@@ -282,11 +281,30 @@ export default function App() {
         const auth = await initAuth();
         if (cancelled) return;
         setAuthClient(auth.client);
-        setActor(auth.actor);
-        setIsAuthed(auth.isAuthenticated);
-        const pText = auth.principalText || '';
-        setPrincipalText(pText);
-        await refreshOwnerAccess(auth.actor, pText);
+        if (auth.isAuthenticated && auth.actor && auth.principalText) {
+          try {
+            const ownerText = await auth.actor.whoami();
+            if (cancelled) return;
+            setActor(auth.actor);
+            setIsAuthed(true);
+            setPrincipalText(auth.principalText);
+            setOwnerPrincipalText(principalToText(ownerText));
+          } catch (_) {
+            const logoutRes = await logoutII(auth.client);
+            if (cancelled) return;
+            setActor(logoutRes.actor);
+            setIsAuthed(false);
+            setPrincipalText('');
+            setOwnerPrincipalText('');
+            setCanisterIdText('');
+            setStatus(t.notOwnerLogin);
+          }
+        } else {
+          setActor(auth.actor);
+          setIsAuthed(false);
+          setPrincipalText('');
+          await refreshOwnerAccess(auth.actor, '', auth.client);
+        }
       } finally {
         if (!cancelled) setAuthLoading(false);
       }
@@ -299,7 +317,7 @@ export default function App() {
 
   useEffect(() => {
     if (!actor || !isAuthed) return;
-    void refresh('main');
+    void refresh();
     void refreshWallet(actor);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actor, isAuthed, authClient]);
@@ -350,30 +368,23 @@ export default function App() {
     try {
       const r = await loginWithII(authClient);
 
-      const ownerRes = await r.actor.owner_get();
-      let ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
-      if (!ownerText) {
+      try {
         await r.actor.whoami();
-        ownerText = r.principalText;
-      }
-
-      if (ownerText !== r.principalText) {
+      } catch (_) {
         const logoutRes = await logoutII(authClient);
         setActor(logoutRes.actor);
         setIsAuthed(false);
         setPrincipalText('');
-        setEthWallet('');
-        setOwnerPrincipalText(ownerText);
-        setAccessLocked(true);
-        setStatus('');
+        setCanisterIdText('');
+        setOwnerPrincipalText('');
+        setStatus(t.notOwnerLogin);
         return;
       }
 
       setActor(r.actor);
       setIsAuthed(true);
       setPrincipalText(r.principalText);
-      setOwnerPrincipalText(ownerText);
-      setAccessLocked(false);
+      setOwnerPrincipalText(r.principalText);
       setStatus(t.done);
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
@@ -390,7 +401,7 @@ export default function App() {
       setActor(r.actor);
       setIsAuthed(false);
       setPrincipalText('');
-      setEthWallet('');
+      setCanisterIdText('');
       await refreshOwnerAccess(r.actor, '');
       setStatus(t.done);
     } catch (e) {
@@ -408,21 +419,16 @@ export default function App() {
     window.location.href = 'wallet.html';
   }
 
-  const showLoginOnly = !authLoading && !isAuthed && !accessLocked && !ownerPrincipalText;
-  const showLockedBlank = !authLoading && !isAuthed && accessLocked;
-
-  if (showLockedBlank) {
-    return <main className="appShell" />;
-  }
+  const canAccess = !!(isAuthed && principalText && ownerPrincipalText && principalText === ownerPrincipalText);
+  const showLoginOnly = !authLoading && !canAccess;
 
   if (showLoginOnly) {
     return (
-      <main className="appShell">
-        <div className="topBar langToggle">
-          <button type="button" onClick={() => void login()} disabled={busy}>
-            {t.login}
-          </button>
-        </div>
+      <main className="loginGate">
+        <button className="loginGateButton" type="button" onClick={() => void login()} disabled={busy}>
+          {t.login}
+        </button>
+        {status ? <div className="loginGateStatus">{status}</div> : null}
       </main>
     );
   }
@@ -430,6 +436,11 @@ export default function App() {
   return (
     <main className="appShell">
       <div className="topBar langToggle">
+        {isAuthed && principalText ? (
+          <span className="principalBadge">
+            {t.principal}: {ownerPrincipalText || principalText}
+          </span>
+        ) : null}
         {!authLoading && (
           isAuthed ? (
             <button type="button" onClick={() => void logout()} style={{ marginRight: 8 }}>
@@ -459,23 +470,14 @@ export default function App() {
           <div className="status">{t.authLoading}</div>
         ) : (
           <>
-            <div className="status"><strong>{t.principal}:</strong> {principalText || 'anonymous'}</div>
-            <div className="status"><strong>{t.ethWallet}:</strong> {ethWallet || '-'}</div>
+            <div className="status"><strong>{t.principal}:</strong> {ownerPrincipalText || '-'}</div>
+            <div className="status"><strong>{t.canisterId}:</strong> {canisterIdText || '-'}</div>
           </>
         )}
       </section>
 
       <section className="panel">
       <div className="row" style={{ margin: '10px 0 14px' }}>
-        <label htmlFor="sessionId">{t.session}</label>
-        <input
-          id="sessionId"
-          type="text"
-          value={sessionId}
-          onChange={(e) => setSessionId(e.target.value)}
-          style={{ minWidth: 220 }}
-        />
-
         <label htmlFor="provider">{t.provider}</label>
         <select id="provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
           <option value="openai">OpenAI</option>

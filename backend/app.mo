@@ -19,6 +19,7 @@ import Types "./openclaw/Types";
 import Wallet "./openclaw/Wallet";
 import EthTx "./openclaw/EthTx";
 import TokenTransfer "./openclaw/TokenTransfer";
+import Migration "migration";
 
 persistent actor OpenClawOnICP {
   // -----------------------------
@@ -38,6 +39,7 @@ persistent actor OpenClawOnICP {
   public type SendIcpResult = Result.Result<Nat, Text>;
   public type SendIcrc1Result = Result.Result<Nat, Text>;
   public type SendEthResult = Result.Result<Text, Text>;
+  public type EthAddressResult = Result.Result<Text, Text>;
   public type BalanceResult = Result.Result<Nat, Text>;
   public type WalletResult = Wallet.WalletResult;
   public type EcdsaPublicKeyResult = Wallet.EcdsaPublicKeyResult;
@@ -62,7 +64,8 @@ persistent actor OpenClawOnICP {
 
   transient let ic : Llm.Http = actor ("aaaaa-aa");
   transient let ic00 : Wallet.Ic00 = actor ("aaaaa-aa");
-  transient let icpLedgerPrincipal : Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
+  transient let icpLedgerMainnetPrincipal : Principal = Principal.fromText("ryjl3-tyaaa-aaaaa-aaaba-cai");
+  transient let icpLedgerLocalPrincipal : Principal = Principal.fromText("ulvla-h7777-77774-qaacq-cai");
 
   // -----------------------------
   // Inbound canister HTTP (for Telegram webhooks)
@@ -100,6 +103,7 @@ persistent actor OpenClawOnICP {
   var tgBotToken : ?Text = null;
   var tgSecretToken : ?Text = null;
   var tgLlmOpts : ?SendOptions = null;
+  var migrationState : ?Migration.State = null;
 
   func assertOwner(caller : Principal) {
     if (Principal.isAnonymous(caller)) {
@@ -288,13 +292,55 @@ persistent actor OpenClawOnICP {
 
   system func preupgrade() {
     usersStore := Store.toStore(users);
+    migrationState := ?Migration.capture(
+      owner,
+      tgBotToken,
+      tgSecretToken,
+      tgLlmOpts,
+      usersStore,
+    );
   };
 
   system func postupgrade() {
+    switch (migrationState) {
+      case (?s) {
+        let restored = Migration.migrate(s);
+        owner := restored.owner;
+        tgBotToken := restored.tgBotToken;
+        tgSecretToken := restored.tgSecretToken;
+        tgLlmOpts := restored.tgLlmOpts;
+        usersStore := restored.usersStore;
+      };
+      case null {
+        // Keep persisted state as-is when there is no migration snapshot.
+      };
+    };
     users := Store.fromStore(usersStore);
   };
 
   func nowNs() : Int { Time.now() };
+
+  type Icrc1FeeProbe = actor {
+    icrc1_fee : shared () -> async Nat;
+  };
+
+  func isLedgerReachable(ledgerPrincipal : Principal) : async Bool {
+    let ledger : Icrc1FeeProbe = actor (Principal.toText(ledgerPrincipal));
+    try {
+      ignore await ledger.icrc1_fee();
+      true
+    } catch (_) {
+      false
+    }
+  };
+
+  func resolveIcpLedgerPrincipal() : async Principal {
+    if (await isLedgerReachable(icpLedgerLocalPrincipal)) {
+      icpLedgerLocalPrincipal
+    } else {
+      icpLedgerMainnetPrincipal
+    }
+  };
 
   public shared ({ caller }) func whoami() : async Text {
     assertOwner(caller);
@@ -323,7 +369,8 @@ persistent actor OpenClawOnICP {
 
   public shared ({ caller }) func wallet_send_icp(toPrincipalText : Text, amountE8s : Nat64) : async SendIcpResult {
     assertOwner(caller);
-    await TokenTransfer.send(icpLedgerPrincipal, toPrincipalText, Nat64.toNat(amountE8s), null, null, null)
+    let ledgerPrincipal = await resolveIcpLedgerPrincipal();
+    await TokenTransfer.send(ledgerPrincipal, toPrincipalText, Nat64.toNat(amountE8s), null, null, null)
   };
 
   public shared ({ caller }) func wallet_send_icrc1(ledgerPrincipalText : Text, toPrincipalText : Text, amount : Nat, fee : ?Nat) : async SendIcrc1Result {
@@ -338,7 +385,8 @@ persistent actor OpenClawOnICP {
 
   public shared ({ caller }) func wallet_balance_icp() : async BalanceResult {
     assertOwner(caller);
-    await TokenTransfer.balance(icpLedgerPrincipal, Principal.fromActor(OpenClawOnICP))
+    let ledgerPrincipal = await resolveIcpLedgerPrincipal();
+    await TokenTransfer.balance(ledgerPrincipal, Principal.fromActor(OpenClawOnICP))
   };
 
   public shared ({ caller }) func wallet_balance_icrc1(ledgerPrincipalText : Text) : async BalanceResult {
@@ -354,6 +402,11 @@ persistent actor OpenClawOnICP {
   public shared ({ caller }) func wallet_send_eth_raw(network : Text, rpcUrl : ?Text, rawTxHex : Text) : async SendEthResult {
     assertOwner(caller);
     await EthTx.sendRaw(ic, http_transform, defaultHttpCycles, network, rpcUrl, rawTxHex)
+  };
+
+  public shared ({ caller }) func wallet_eth_address() : async EthAddressResult {
+    assertOwner(caller);
+    await EthTx.ethAddress(ic00, caller, Principal.fromActor(OpenClawOnICP))
   };
 
   public shared ({ caller }) func wallet_send_eth(network : Text, rpcUrl : ?Text, toAddress : Text, amountWei : Nat) : async SendEthResult {

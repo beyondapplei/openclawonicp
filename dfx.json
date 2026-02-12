@@ -10,6 +10,11 @@
       "type": "motoko",
       "args": "--enhanced-orthogonal-persistence"
     },
+    "ledger": {
+      "type": "custom",
+      "candid": "backend/ledger_assets/ledger-canister.wasm.gz.did",
+      "wasm": "backend/ledger_assets/ledger-canister.wasm.gz"
+    },
     "frontend": {
       "dependencies": ["backend"],
       "frontend": {

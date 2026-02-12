@@ -1,5 +1,12 @@
 # OpenClaw on ICP（最小可用子集）
 
+
+后端Canister 是一个活的Agent
+
+拥有自己的钱包，私钥在子网手里。控制权在Agent手里。
+
+
+
 这是一个将 OpenClaw 的部分“核心体验”迁移到 Internet Computer（ICP）上的示例项目：
 
 - 后端：Motoko canister（会话/历史、技能仓库、有限工具、LLM HTTPS outcalls）
@@ -15,15 +22,15 @@
 - LLM：支持 OpenAI / Anthropic 的 HTTPS outcalls（`sessions_send` 内部调用）
 - LLM：支持 OpenAI / Anthropic / Google (Gemini, AI Studio) 的 HTTPS outcalls（`sessions_send` 内部调用）
 - WebChat：网页聊天 UI，可选择 provider/model、填写 API Key、查看历史、重置会话
-- 钱包：主界面“钱包”按钮会打开独立全屏钱包页（`wallet.html`）
-- 钱包：钱包页采用参考 Oisy 的双栏布局（左侧资产与地址、右侧转账卡片）
+- 钱包：主界面“钱包”按钮可查看后端 canister 的 ICP/ETH 接受地址，并支持发送 ICP
 - 钱包：支持发送 ETH（Ethereum Mainnet / Base Mainnet）
 	- ETH 发送流程已改为后端执行：后端查 nonce/gas -> 后端签名 -> 后端广播
 - 钱包：支持发送 ICRC1 Token（传入 Ledger Principal + 目标 Principal + amount + 可选 fee）
 - 钱包：支持发送 ERC20（后端构造 `transfer(address,uint256)` 并签名广播）
 - 钱包：支持余额查询（ICP / ICRC1 / ETH / ERC20）
-- 访问控制：首个登录用户会绑定为 owner；owner 之外的用户前端不显示登录入口与业务界面
-- 访问控制：后端接口按 owner 严格鉴权（包括关键 query），非 owner 无法调用
+- 钱包：`wallet_eth_address()` 由后端返回 Agent ETH 地址（前端不再本地推导）
+- 钱包：后端自动判断 ICP Ledger 网络（本地可用则走本地 ledger，否则回退主网 ledger）
+- 架构：业务逻辑后端化（签名、转账、余额与地址计算都在 canister），前端仅负责 UI 与调用
 - 语言切换：右上角按钮切换中文/英文（仅切换界面文案）
 
 ## 目录结构
@@ -39,9 +46,7 @@
 	- EthTx.mo：ETH 构造、签名与广播
 - 前端：frontend/
 	- index.html：React 挂载点
-	- wallet.html：钱包全屏页面入口
 	- src/App.jsx：聊天 UI + 中英文切换
-	- src/wallet/WalletApp.jsx：钱包全屏 UI
 
 ## 使用方式
 
@@ -98,6 +103,7 @@
 - wallet
 	- `canister_principal()`
 	- `agent_wallet()`
+	- `wallet_eth_address()`
 	- `wallet_send_icp(toPrincipalText, amountE8s)`
 	- `wallet_send_icrc1(ledgerPrincipalText, toPrincipalText, amount, fee)`
 	- `wallet_send_eth_raw(network, rpcUrl, rawTxHex)`
@@ -110,7 +116,7 @@
 	- `ecdsa_public_key(derivationPath, keyName)`
 	- `sign_with_ecdsa(messageHash, derivationPath, keyName)`
 
-说明：`wallet_send_eth` 使用后端 canister 直接调用系统 `ecdsa_public_key/sign_with_ecdsa` 完成签名与广播，不依赖 Chain Fusion Signer；前端关闭后，后端接口仍可由其他调用方触发。
+说明：`wallet_send_eth` 使用后端 canister 直接调用系统 `ecdsa_public_key/sign_with_ecdsa` 完成签名与广播，不依赖 Chain Fusion Signer；前端关闭后，后端接口仍可由其他调用方触发。当前钱包相关能力（地址计算/余额查询/转账）均由后端执行。
 
 ## Telegram 接入（Bot Webhook）
 
@@ -145,22 +151,7 @@
 
 在 Telegram 里给 bot 发消息即可。会话按 chat id 隔离：`sessionId = "tg:<chatId>"`。
 
-## 本次改动（相对 ICP Ninja HelloWorld 模板）
 
-- 后端从 HelloWorld 重构为 OpenClaw 风格最小子集：会话/历史、技能、工具、LLM outcalls
-- 后端按模块拆分到 backend/openclaw/，主入口 backend/app.mo 仅负责组装与对外导出
-- 前端从纯 HTML/JS 重写为 Vite + React，并加入右上角中英文切换
-- 构建流程：`npm run build` 会先 `dfx generate backend` 再 `vite build` 产出 frontend/dist
-
-## 最近更新（详细）
-
-### 1. 多页面前端
-
-- 新增 `admin.html` 管理页面入口。
-- 新增 `wallet.html` 钱包页面入口。
-- 主页面新增“管理界面”按钮，点击后在新页面打开管理页。
-- 主页面“钱包”按钮改为跳转独立钱包页（全屏）。
-- Vite 配置为多页面构建：同时打包 `index.html`、`admin.html`、`wallet.html`。
 
 ### 2. 管理页面（Telegram + LLM）
 
@@ -175,33 +166,11 @@
 	- 默认 LLM provider/model/apiKey/system prompt
 	- Webhook URL
 
-### 3. 管理页技能查看
 
-- 新增“加载后端技能”按钮，调用 `skills_list` 获取技能名列表。
-- 列表项可点击，调用 `skills_get(name)` 获取技能详情。
-- 详情在管理页文本区域中展示，便于查看已存储技能内容。
 
-### 4. Gemini 模型与可用性改进
 
-- 后端支持查询 Google 可用模型并返回给前端下拉选择。
-- 前端在 Google provider 下自动拉取模型列表，减少手动输入错误。
-- 对 Gemini 模型名做归一化兼容（如 `gemini` -> `gemini-1.5-flash`）。
 
 ### 5. Identity + 后端签名钱包
 
 - 前端接入 Internet Identity 登录（II），登录后显示当前 Principal。
 - ETH 地址通过后端调用系统接口 `ecdsa_public_key` 获取公钥并派生地址（前端只做展示）。
-
-### 6. 钱包页布局改造（参考 Oisy）
-
-- 钱包能力从聊天页中拆分，迁移到独立全屏页面。
-- 页面结构改为左侧账户/资产概览 + 右侧分卡片交易区（ICP/ETH/ICRC1/ERC20）。
-- 聊天页仅保留钱包入口与地址概览信息，减少主页面复杂度。
-
-### 7. 首登绑定与独占访问控制
-
-- 系统以“首个成功登录用户”为 owner（自动绑定）。
-- 初始状态（未绑定 owner）下，页面仅显示登录按钮，不展示业务信息。
-- owner 绑定后，非 owner 用户看不到登录按钮与业务界面。
-- 该策略在主聊天页、钱包页、管理页保持一致。
-- 后端同时执行 owner 鉴权，确保非 owner 无法通过 API 绕过前端限制。

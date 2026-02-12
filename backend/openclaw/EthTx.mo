@@ -20,6 +20,15 @@ import Llm "./Llm";
 module {
   public type SendEthResult = Result.Result<Text, Text>;
   public type BalanceResult = Result.Result<Nat, Text>;
+  public type AddressResult = Result.Result<Text, Text>;
+
+  public func ethAddress(
+    ic00 : Wallet.Ic00,
+    caller : Principal,
+    canisterId : Principal,
+  ) : async AddressResult {
+    await backendEthAddress(ic00, caller, canisterId)
+  };
 
   public func sendRaw(
     ic : Llm.Http,

@@ -38,6 +38,7 @@ const I18N = {
     logout: '退出登录',
     principal: 'Principal',
     authLoading: '身份初始化中…',
+    notOwnerLogin: '不是 agent 的拥有者，不能登录',
   },
   en: {
     title: 'Telegram Admin',
@@ -75,6 +76,7 @@ const I18N = {
     logout: 'Logout',
     principal: 'Principal',
     authLoading: 'Initializing identity…',
+    notOwnerLogin: 'Not the agent owner. Login denied.',
   },
 };
 
@@ -94,7 +96,6 @@ export default function AdminApp() {
   const [principalText, setPrincipalText] = useState('');
   const [authLoading, setAuthLoading] = useState(true);
   const [ownerPrincipalText, setOwnerPrincipalText] = useState('');
-  const [accessLocked, setAccessLocked] = useState(false);
 
   const [status, setStatus] = useState('');
   const [tgStatus, setTgStatus] = useState(null);
@@ -122,25 +123,32 @@ export default function AdminApp() {
     return String(p);
   }
 
-  async function refreshOwnerAccess(a, principalHint = '') {
+  async function refreshOwnerAccess(a, principalHint = '', client = authClient) {
     if (!a) {
       setOwnerPrincipalText('');
-      setAccessLocked(false);
       return;
     }
     try {
+      if (principalHint.trim()) {
+        const me = await a.whoami();
+        setOwnerPrincipalText(principalToText(me));
+        return;
+      }
       const ownerRes = await a.owner_get();
       const ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
       setOwnerPrincipalText(ownerText);
-      if (!ownerText) {
-        setAccessLocked(false);
+    } catch (_) {
+      if (principalHint.trim()) {
+        if (client) {
+          const logoutRes = await logoutII(client);
+          setActor(logoutRes.actor);
+        }
+        setIsAuthed(false);
+        setPrincipalText('');
+        setStatus(t.notOwnerLogin);
         return;
       }
-      const me = (principalHint || principalText || '').trim();
-      setAccessLocked(me !== ownerText);
-    } catch (_) {
       setOwnerPrincipalText('');
-      setAccessLocked(false);
     }
   }
 
@@ -152,11 +160,29 @@ export default function AdminApp() {
         const auth = await initAuth();
         if (cancelled) return;
         setAuthClient(auth.client);
-        setActor(auth.actor);
-        setIsAuthed(auth.isAuthenticated);
-        const pText = auth.principalText || '';
-        setPrincipalText(pText);
-        await refreshOwnerAccess(auth.actor, pText);
+        if (auth.isAuthenticated && auth.actor && auth.principalText) {
+          try {
+            const ownerText = await auth.actor.whoami();
+            if (cancelled) return;
+            setActor(auth.actor);
+            setIsAuthed(true);
+            setPrincipalText(auth.principalText);
+            setOwnerPrincipalText(principalToText(ownerText));
+          } catch (_) {
+            const logoutRes = await logoutII(auth.client);
+            if (cancelled) return;
+            setActor(logoutRes.actor);
+            setIsAuthed(false);
+            setPrincipalText('');
+            setOwnerPrincipalText('');
+            setStatus(t.notOwnerLogin);
+          }
+        } else {
+          setActor(auth.actor);
+          setIsAuthed(false);
+          setPrincipalText('');
+          await refreshOwnerAccess(auth.actor, '', auth.client);
+        }
       } finally {
         if (!cancelled) setAuthLoading(false);
       }
@@ -173,29 +199,22 @@ export default function AdminApp() {
     try {
       const r = await loginWithII(authClient);
 
-      const ownerRes = await r.actor.owner_get();
-      let ownerText = ownerRes?.[0] ? principalToText(ownerRes[0]) : '';
-      if (!ownerText) {
+      try {
         await r.actor.whoami();
-        ownerText = r.principalText;
-      }
-
-      if (ownerText !== r.principalText) {
+      } catch (_) {
         const logoutRes = await logoutII(authClient);
         setActor(logoutRes.actor);
         setIsAuthed(false);
         setPrincipalText('');
-        setOwnerPrincipalText(ownerText);
-        setAccessLocked(true);
-        setStatus('');
+        setOwnerPrincipalText('');
+        setStatus(t.notOwnerLogin);
         return;
       }
 
       setActor(r.actor);
       setIsAuthed(true);
       setPrincipalText(r.principalText);
-      setOwnerPrincipalText(ownerText);
-      setAccessLocked(false);
+      setOwnerPrincipalText(r.principalText);
       setStatus(t.ok);
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
@@ -330,21 +349,16 @@ export default function AdminApp() {
     }
   }
 
-  const showLoginOnly = !authLoading && !isAuthed && !accessLocked && !ownerPrincipalText;
-  const showLockedBlank = !authLoading && !isAuthed && accessLocked;
-
-  if (showLockedBlank) {
-    return <main className="appShell" />;
-  }
+  const canAccess = !!(isAuthed && principalText && ownerPrincipalText && principalText === ownerPrincipalText);
+  const showLoginOnly = !authLoading && !canAccess;
 
   if (showLoginOnly) {
     return (
-      <main className="appShell">
-        <div className="topBar langToggle">
-          <button type="button" onClick={() => void login()} disabled={busy}>
-            {t.login}
-          </button>
-        </div>
+      <main className="loginGate">
+        <button className="loginGateButton" type="button" onClick={() => void login()} disabled={busy}>
+          {t.login}
+        </button>
+        {status ? <div className="loginGateStatus">{status}</div> : null}
       </main>
     );
   }

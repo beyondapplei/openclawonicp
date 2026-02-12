@@ -27,6 +27,8 @@ export interface EcdsaPublicKeyOut {
 }
 export type EcdsaPublicKeyResult = { 'ok' : EcdsaPublicKeyOut } |
   { 'err' : string };
+export type EthAddressResult = { 'ok' : string } |
+  { 'err' : string };
 export type HeaderField = [string, string];
 export interface HttpHeader { 'value' : string, 'name' : string }
 export interface HttpResponsePayload {
@@ -151,6 +153,7 @@ export interface _SERVICE {
   'wallet_balance_eth' : ActorMethod<[string, [] | [string]], BalanceResult>,
   'wallet_balance_icp' : ActorMethod<[], BalanceResult>,
   'wallet_balance_icrc1' : ActorMethod<[string], BalanceResult>,
+  'wallet_eth_address' : ActorMethod<[], EthAddressResult>,
   'wallet_send_erc20' : ActorMethod<
     [string, [] | [string], string, string, bigint],
     SendEthResult
