@@ -1,6 +1,5 @@
 import Nat "mo:base/Nat";
 import Nat64 "mo:base/Nat64";
-import Nat16 "mo:base/Nat16";
 import Blob "mo:base/Blob";
 import Principal "mo:base/Principal";
 import Debug "mo:base/Debug";
@@ -8,17 +7,24 @@ import Result "mo:base/Result";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
 
-import HttpTypes "./openclaw/HttpTypes";
-import Llm "./openclaw/Llm";
-import Sessions "./openclaw/Sessions";
-import Skills "./openclaw/Skills";
-import Store "./openclaw/Store";
-import Tools "./openclaw/Tools";
-import Telegram "./openclaw/Telegram";
-import Types "./openclaw/Types";
-import Wallet "./openclaw/Wallet";
-import WalletIcp "./openclaw/WalletIcp";
-import WalletEvm "./openclaw/WalletEvm";
+import HttpTypes "./openclaw/http/HttpTypes";
+import ChannelRouter "./openclaw/channels/ChannelRouter";
+import DiscordChannelAdapter "./openclaw/channels/DiscordChannelAdapter";
+import TelegramChannelAdapter "./openclaw/channels/TelegramChannelAdapter";
+import Llm "./openclaw/llm/Llm";
+import Sessions "./openclaw/core/Sessions";
+import Hooks "./openclaw/core/Hooks";
+import Skills "./openclaw/core/Skills";
+import Store "./openclaw/core/Store";
+import Tools "./openclaw/core/Tools";
+import Telegram "./openclaw/telegram/Telegram";
+import Types "./openclaw/core/Types";
+import Wallet "./openclaw/wallet/Wallet";
+import WalletIcp "./openclaw/wallet/WalletIcp";
+import WalletEvm "./openclaw/wallet/WalletEvm";
+import CkEthTrade "./openclaw/wallet/CkEthTrade";
+import KeyVault "./openclaw/core/KeyVault";
+import LlmToolRouter "./openclaw/llm/LlmToolRouter";
 import Migration "migration";
 
 persistent actor OpenClawOnICP {
@@ -34,11 +40,13 @@ persistent actor OpenClawOnICP {
   public type SendOk = Types.SendOk;
   public type SendResult = Types.SendResult;
   public type ToolResult = Types.ToolResult;
+  public type HookEntry = Hooks.HookEntry;
 
   public type ModelsResult = Result.Result<[Text], Text>;
   public type SendIcpResult = Result.Result<Nat, Text>;
   public type SendIcrc1Result = Result.Result<Nat, Text>;
   public type SendEthResult = Result.Result<Text, Text>;
+  public type BuyCkEthResult = Result.Result<Text, Text>;
   public type EthAddressResult = Result.Result<Text, Text>;
   public type BalanceResult = Result.Result<Nat, Text>;
   public type WalletResult = Wallet.WalletResult;
@@ -52,6 +60,19 @@ persistent actor OpenClawOnICP {
     configured : Bool;
     hasSecret : Bool;
     hasLlmConfig : Bool;
+  };
+
+  public type DiscordStatus = {
+    configured : Bool;
+    hasProxySecret : Bool;
+    hasLlmConfig : Bool;
+  };
+
+  public type CkEthStatus = {
+    hasIcpswapQuoteUrl : Bool;
+    hasKongswapQuoteUrl : Bool;
+    hasIcpswapBroker : Bool;
+    hasKongswapBroker : Bool;
   };
 
   // -----------------------------
@@ -71,25 +92,9 @@ persistent actor OpenClawOnICP {
   // Inbound canister HTTP (for Telegram webhooks)
   // -----------------------------
 
-  type HeaderField = (Text, Text);
-  type InHttpRequest = {
-    method : Text;
-    url : Text;
-    headers : [HeaderField];
-    body : Blob;
-  };
-  type InHttpResponse = {
-    status_code : Nat16;
-    headers : [HeaderField];
-    body : Blob;
-    streaming_strategy : ?{
-      #Callback : {
-        callback : shared query () -> async (); // unused
-        token : Blob;
-      }
-    };
-    upgrade : ?Bool;
-  };
+  type HeaderField = ChannelRouter.HeaderField;
+  type InHttpRequest = ChannelRouter.InHttpRequest;
+  type InHttpResponse = ChannelRouter.InHttpResponse;
 
   public query func http_transform(args : TransformArgs) : async HttpResponsePayload {
     { status = args.response.status; headers = []; body = args.response.body };
@@ -103,6 +108,12 @@ persistent actor OpenClawOnICP {
   var tgBotToken : ?Text = null;
   var tgSecretToken : ?Text = null;
   var tgLlmOpts : ?SendOptions = null;
+  var discordProxySecret : ?Text = null;
+  var ckethIcpswapQuoteUrl : ?Text = null;
+  var ckethKongswapQuoteUrl : ?Text = null;
+  var ckethIcpswapBrokerCanisterText : ?Text = null;
+  var ckethKongswapBrokerCanisterText : ?Text = null;
+  var llmApiKeysEnc : [(Text, Text)] = [];
   var migrationState : ?Migration.State = null;
 
   func assertOwner(caller : Principal) {
@@ -137,6 +148,58 @@ persistent actor OpenClawOnICP {
     tgLlmOpts := ?opts;
   };
 
+  public shared ({ caller }) func admin_set_discord(proxySecret : ?Text) : async () {
+    assertOwner(caller);
+    discordProxySecret := switch (proxySecret) {
+      case null null;
+      case (?s) {
+        let t = Text.trim(s, #char ' ');
+        if (Text.size(t) == 0) null else ?t;
+      };
+    };
+  };
+
+  public shared ({ caller }) func admin_set_cketh_broker(canisterText : ?Text) : async () {
+    assertOwner(caller);
+    ckethIcpswapBrokerCanisterText := normalizeOptText(canisterText);
+  };
+
+  public shared ({ caller }) func admin_set_cketh_brokers(icpswapCanisterText : ?Text, kongswapCanisterText : ?Text) : async () {
+    assertOwner(caller);
+    ckethIcpswapBrokerCanisterText := normalizeOptText(icpswapCanisterText);
+    ckethKongswapBrokerCanisterText := normalizeOptText(kongswapCanisterText);
+  };
+
+  public shared ({ caller }) func admin_set_cketh_quote_sources(icpswapQuoteUrl : ?Text, kongswapQuoteUrl : ?Text) : async () {
+    assertOwner(caller);
+    ckethIcpswapQuoteUrl := normalizeOptText(icpswapQuoteUrl);
+    ckethKongswapQuoteUrl := normalizeOptText(kongswapQuoteUrl);
+  };
+
+  public shared ({ caller }) func admin_set_provider_api_key(provider : Provider, apiKey : Text) : async () {
+    assertOwner(caller);
+    llmApiKeysEnc := KeyVault.setProviderApiKey(llmApiKeysEnc, provider, apiKey);
+  };
+
+  public shared query ({ caller }) func admin_has_provider_api_key(provider : Provider) : async Bool {
+    assertOwnerQuery(caller);
+    KeyVault.hasProviderApiKey(llmApiKeysEnc, provider)
+  };
+
+  func resolveApiKey(provider : Provider, providedApiKey : Text) : Result.Result<Text, Text> {
+    KeyVault.resolveApiKey(llmApiKeysEnc, provider, providedApiKey)
+  };
+
+  func normalizeOptText(v : ?Text) : ?Text {
+    switch (v) {
+      case null null;
+      case (?s) {
+        let t = Text.trim(s, #char ' ');
+        if (Text.size(t) == 0) null else ?t;
+      };
+    }
+  };
+
   public shared ({ caller }) func admin_tg_set_webhook(webhookUrl : Text) : async Result.Result<Text, Text> {
     assertOwner(caller);
     switch (tgBotToken) {
@@ -156,131 +219,85 @@ persistent actor OpenClawOnICP {
     }
   };
 
-  func headerGet(headers : [HeaderField], key : Text) : ?Text {
-    for ((k, v) in headers.vals()) {
-      if (Text.toLowercase(k) == Text.toLowercase(key)) return ?v;
-    };
-    null
+  public shared ({ caller }) func discord_status() : async DiscordStatus {
+    assertOwner(caller);
+    {
+      configured = (discordProxySecret != null);
+      hasProxySecret = (discordProxySecret != null);
+      hasLlmConfig = (tgLlmOpts != null);
+    }
+  };
+
+  public shared ({ caller }) func cketh_status() : async CkEthStatus {
+    assertOwner(caller);
+    {
+      hasIcpswapQuoteUrl = (ckethIcpswapQuoteUrl != null);
+      hasKongswapQuoteUrl = (ckethKongswapQuoteUrl != null);
+      hasIcpswapBroker = (ckethIcpswapBrokerCanisterText != null);
+      hasKongswapBroker = (ckethKongswapBrokerCanisterText != null);
+    }
   };
 
   // Canister HTTP entrypoint (query): upgrade Telegram webhooks to update.
   public query func http_request(req : InHttpRequest) : async InHttpResponse {
-    if (req.method == "POST" and Text.startsWith(req.url, #text "/tg/webhook")) {
-      return {
-        status_code = 200;
-        headers = [("content-type", "text/plain")];
-        body = Text.encodeUtf8("ok");
-        streaming_strategy = null;
-        upgrade = ?true;
-      };
-    };
-
-    {
-      status_code = 404;
-      headers = [("content-type", "text/plain")];
-      body = Text.encodeUtf8("not found");
-      streaming_strategy = null;
-      upgrade = null;
-    }
+    ChannelRouter.routeQuery(req, [
+      TelegramChannelAdapter.queryHandler(),
+      DiscordChannelAdapter.queryHandler(),
+    ])
   };
 
   // Canister HTTP update handler: process Telegram webhook.
   public shared ({ caller = _ }) func http_request_update(req : InHttpRequest) : async InHttpResponse {
-    if (not (req.method == "POST" and Text.startsWith(req.url, #text "/tg/webhook"))) {
-      return {
-        status_code = 404;
-        headers = [("content-type", "text/plain")];
-        body = Text.encodeUtf8("not found");
-        streaming_strategy = null;
-        upgrade = null;
-      };
-    };
-
-    // Optional secret check.
-    switch (tgSecretToken) {
-      case null {};
-      case (?secret) {
-        let hdr = headerGet(req.headers, "x-telegram-bot-api-secret-token");
-        if (hdr != ?secret) {
-          return {
-            status_code = 401;
-            headers = [("content-type", "text/plain")];
-            body = Text.encodeUtf8("unauthorized");
-            streaming_strategy = null;
-            upgrade = null;
+    let tgOptsResolved : ?SendOptions = switch (tgLlmOpts) {
+      case null null;
+      case (?opts) {
+        switch (resolveApiKey(opts.provider, opts.apiKey)) {
+          case (#err(_)) null;
+          case (#ok(k)) {
+            ?{
+              provider = opts.provider;
+              model = opts.model;
+              apiKey = k;
+              systemPrompt = opts.systemPrompt;
+              maxTokens = opts.maxTokens;
+              temperature = opts.temperature;
+              skillNames = opts.skillNames;
+              includeHistory = opts.includeHistory;
+            }
           };
-        };
-      };
-    };
-
-    let bodyText = switch (Text.decodeUtf8(req.body)) {
-      case null {
-        return {
-          status_code = 400;
-          headers = [("content-type", "text/plain")];
-          body = Text.encodeUtf8("bad request");
-          streaming_strategy = null;
-          upgrade = null;
-        };
-      };
-      case (?t) t;
-    };
-
-    let parsed = Telegram.parseUpdate(bodyText);
-    switch (parsed) {
-      case null {
-        return {
-          status_code = 200;
-          headers = [("content-type", "text/plain")];
-          body = Text.encodeUtf8("ok");
-          streaming_strategy = null;
-          upgrade = null;
-        };
-      };
-      case (?u) {
-        let token = switch (tgBotToken) {
-          case null return {
-            status_code = 503;
-            headers = [("content-type", "text/plain")];
-            body = Text.encodeUtf8("telegram not configured");
-            streaming_strategy = null;
-            upgrade = null;
-          };
-          case (?t) t;
-        };
-
-        let opts = switch (tgLlmOpts) {
-          case null return {
-            status_code = 503;
-            headers = [("content-type", "text/plain")];
-            body = Text.encodeUtf8("llm not configured");
-            streaming_strategy = null;
-            upgrade = null;
-          };
-          case (?o) o;
-        };
-
-        // Use canister principal as a dedicated namespace so it doesn't collide with anonymous web users.
-        let tgUser = Principal.fromActor(OpenClawOnICP);
-        let sessionId = "tg:" # Nat.toText(u.chatId);
-
-        let sendRes = await Sessions.send(users, tgUser, sessionId, u.text, opts, nowNs, modelCaller, ?toolCaller);
-        switch (sendRes) {
-          case (#err(_)) {};
-          case (#ok(ok)) {
-            ignore await Telegram.sendMessage(ic, http_transform, defaultHttpCycles, token, u.chatId, ok.assistant.content);
-          };
-        };
-
-        {
-          status_code = 200;
-          headers = [("content-type", "text/plain")];
-          body = Text.encodeUtf8("ok");
-          streaming_strategy = null;
-          upgrade = null;
         }
       };
-    }
+    };
+
+    await ChannelRouter.routeUpdate(
+      req,
+      [
+        TelegramChannelAdapter.updateHandler({
+          tgBotToken = tgBotToken;
+          tgSecretToken = tgSecretToken;
+          tgLlmOpts = tgOptsResolved;
+          users = users;
+          canisterPrincipal = Principal.fromActor(OpenClawOnICP);
+          nowNs = nowNs;
+          modelCaller = modelCaller;
+          toolCaller = toolCaller;
+          toolSpecs = llmToolSpecs;
+          ic = ic;
+          transformFn = http_transform;
+          defaultHttpCycles = defaultHttpCycles;
+        }),
+        DiscordChannelAdapter.updateHandler({
+          llmOpts = tgOptsResolved;
+          proxySecret = discordProxySecret;
+          users = users;
+          canisterPrincipal = Principal.fromActor(OpenClawOnICP);
+          nowNs = nowNs;
+          modelCaller = modelCaller;
+          toolCaller = toolCaller;
+          toolSpecs = llmToolSpecs;
+        }),
+      ],
+    )
   };
 
   // -----------------------------
@@ -298,6 +315,12 @@ persistent actor OpenClawOnICP {
       tgSecretToken,
       tgLlmOpts,
       usersStore,
+      llmApiKeysEnc,
+      discordProxySecret,
+      ckethIcpswapQuoteUrl,
+      ckethKongswapQuoteUrl,
+      ckethIcpswapBrokerCanisterText,
+      ckethKongswapBrokerCanisterText,
     );
   };
 
@@ -310,6 +333,12 @@ persistent actor OpenClawOnICP {
         tgSecretToken := restored.tgSecretToken;
         tgLlmOpts := restored.tgLlmOpts;
         usersStore := restored.usersStore;
+        llmApiKeysEnc := restored.llmApiKeysEnc;
+        discordProxySecret := restored.discordProxySecret;
+        ckethIcpswapQuoteUrl := restored.ckethIcpswapQuoteUrl;
+        ckethKongswapQuoteUrl := restored.ckethKongswapQuoteUrl;
+        ckethIcpswapBrokerCanisterText := restored.ckethIcpswapBrokerCanisterText;
+        ckethKongswapBrokerCanisterText := restored.ckethKongswapBrokerCanisterText;
       };
       case null {
         // Keep persisted state as-is when there is no migration snapshot.
@@ -319,6 +348,18 @@ persistent actor OpenClawOnICP {
   };
 
   func nowNs() : Int { Time.now() };
+
+  func ckethVenueConfig() : CkEthTrade.VenueConfig {
+    {
+      ic = ic;
+      transformFn = http_transform;
+      httpCycles = defaultHttpCycles;
+      icpswapQuoteUrl = ckethIcpswapQuoteUrl;
+      kongswapQuoteUrl = ckethKongswapQuoteUrl;
+      icpswapBroker = ckethIcpswapBrokerCanisterText;
+      kongswapBroker = ckethKongswapBrokerCanisterText;
+    }
+  };
 
   public shared ({ caller }) func whoami() : async Text {
     assertOwner(caller);
@@ -408,6 +449,18 @@ persistent actor OpenClawOnICP {
     )
   };
 
+  public shared ({ caller }) func wallet_buy_cketh_one(maxIcpE8s : Nat64) : async BuyCkEthResult {
+    assertOwner(caller);
+    if (maxIcpE8s == 0) return #err("maxIcpE8s must be > 0");
+    await CkEthTrade.buyOne(ckethVenueConfig(), maxIcpE8s)
+  };
+
+  public shared ({ caller }) func wallet_buy_cketh(amountCkEthText : Text, maxIcpE8s : Nat64) : async BuyCkEthResult {
+    assertOwner(caller);
+    if (maxIcpE8s == 0) return #err("maxIcpE8s must be > 0");
+    await CkEthTrade.buyBest(ckethVenueConfig(), amountCkEthText, maxIcpE8s)
+  };
+
   public shared ({ caller }) func wallet_balance_eth(network : Text, rpcUrl : ?Text) : async BalanceResult {
     assertOwner(caller);
     await WalletEvm.balanceEth(
@@ -476,8 +529,11 @@ persistent actor OpenClawOnICP {
   // Model discovery (for UI dropdowns)
   public shared ({ caller }) func models_list(provider : Provider, apiKey : Text) : async ModelsResult {
     assertOwner(caller);
-    if (Text.size(Text.trim(apiKey, #char ' ')) == 0) return #err("apiKey is required");
-    await Llm.listModels(ic, http_transform, defaultHttpCycles, provider, apiKey)
+    let resolvedApiKey = switch (resolveApiKey(provider, apiKey)) {
+      case (#err(e)) return #err(e);
+      case (#ok(k)) k;
+    };
+    await Llm.listModels(ic, http_transform, defaultHttpCycles, provider, resolvedApiKey)
   };
 
   func modelCaller(
@@ -492,31 +548,58 @@ persistent actor OpenClawOnICP {
     await Llm.callModel(ic, http_transform, defaultHttpCycles, provider, model, apiKey, sysPrompt, history, maxTokens, temperature)
   };
 
-    func toolCaller(name : Text, args : [Text]) : async ToolResult {
-      switch (name) {
-        case ("wallet_send_icp") {
-          if (args.size() < 2) return #err("wallet_send_icp requires args: to_principal, amount_e8s");
-          let toPrincipalText = Text.trim(args[0], #char ' ');
-          let amountNat : Nat = switch (Nat.fromText(Text.trim(args[1], #char ' '))) {
-            case null return #err("invalid amount_e8s");
-            case (?v) v;
-          };
-          if (amountNat > 18_446_744_073_709_551_615) return #err("amount_e8s overflow nat64");
-          let amountE8s : Nat64 = Nat64.fromNat(amountNat);
-          if (Text.size(toPrincipalText) == 0 or amountE8s == 0) {
-            return #err("invalid tool args");
-          };
-          switch (await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toPrincipalText, amountE8s)) {
-            case (#ok(blockIndex)) #ok(Nat.toText(blockIndex));
-            case (#err(e)) #err(e);
-          }
+  let llmToolSpecs : [Sessions.ToolSpec] = LlmToolRouter.defaultSpecs;
+
+  func toolCaller(name : Text, args : [Text]) : async ToolResult {
+    await LlmToolRouter.dispatch(
+      name,
+      args,
+      func(toPrincipalText : Text, amountE8s : Nat64) : async Result.Result<Nat, Text> {
+        await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toPrincipalText, amountE8s)
+      },
+      func(network : Text, toAddress : Text, amountWei : Nat) : async Result.Result<Text, Text> {
+        await WalletEvm.send(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          Principal.fromActor(OpenClawOnICP),
+          Principal.fromActor(OpenClawOnICP),
+          network,
+          null,
+          toAddress,
+          amountWei,
+        )
+      },
+      func(chatId : Nat, messageText : Text) : async Result.Result<(), Text> {
+        let token = switch (tgBotToken) {
+          case null return #err("telegram bot token not configured");
+          case (?t) t;
         };
-        case (_) #err("unknown tool")
-      }
-    };
+        await Telegram.sendMessage(ic, http_transform, defaultHttpCycles, token, chatId, messageText)
+      },
+      func(amountCkEthText : Text, maxIcpE8s : Nat64) : async Result.Result<Text, Text> {
+        await CkEthTrade.buyBest(ckethVenueConfig(), amountCkEthText, maxIcpE8s)
+      },
+    )
+  };
   public shared ({ caller }) func sessions_send(sessionId : Text, message : Text, opts : SendOptions) : async SendResult {
     assertOwner(caller);
-     await Sessions.send(users, caller, sessionId, message, opts, nowNs, modelCaller, ?toolCaller)
+    let resolvedApiKey = switch (resolveApiKey(opts.provider, opts.apiKey)) {
+      case (#err(e)) return #err(e);
+      case (#ok(k)) k;
+    };
+    let opts2 : SendOptions = {
+      provider = opts.provider;
+      model = opts.model;
+      apiKey = resolvedApiKey;
+      systemPrompt = opts.systemPrompt;
+      maxTokens = opts.maxTokens;
+      temperature = opts.temperature;
+      skillNames = opts.skillNames;
+      includeHistory = opts.includeHistory;
+    };
+    await Sessions.send(users, caller, sessionId, message, opts2, nowNs, modelCaller, ?toolCaller, llmToolSpecs)
   };
 
   // -----------------------------
@@ -550,6 +633,48 @@ persistent actor OpenClawOnICP {
   // -----------------------------
   // tools_* (very limited, chain-safe)
   // -----------------------------
+
+  public shared ({ caller }) func hooks_list() : async [HookEntry] {
+    assertOwner(caller);
+    let u = Store.getOrInitUser(users, caller);
+    Hooks.list(u)
+  };
+
+  public shared ({ caller }) func hooks_put_command_reply(name : Text, command : Text, reply : Text) : async Bool {
+    assertOwner(caller);
+    let u = Store.getOrInitUser(users, caller);
+    Hooks.putCommandReply(u, name, command, reply)
+  };
+
+  public shared ({ caller }) func hooks_put_message_reply(name : Text, keyword : Text, reply : Text) : async Bool {
+    assertOwner(caller);
+    let u = Store.getOrInitUser(users, caller);
+    Hooks.putMessageReply(u, name, keyword, reply)
+  };
+
+  public shared ({ caller }) func hooks_put_command_tool(name : Text, command : Text, toolName : Text, toolArgs : [Text]) : async Bool {
+    assertOwner(caller);
+    let u = Store.getOrInitUser(users, caller);
+    Hooks.putCommandTool(u, name, command, toolName, toolArgs)
+  };
+
+  public shared ({ caller }) func hooks_put_message_tool(name : Text, keyword : Text, toolName : Text, toolArgs : [Text]) : async Bool {
+    assertOwner(caller);
+    let u = Store.getOrInitUser(users, caller);
+    Hooks.putMessageTool(u, name, keyword, toolName, toolArgs)
+  };
+
+  public shared ({ caller }) func hooks_delete(name : Text) : async Bool {
+    assertOwner(caller);
+    let u = Store.getOrInitUser(users, caller);
+    Hooks.delete(u, name)
+  };
+
+  public shared ({ caller }) func hooks_set_enabled(name : Text, enabled : Bool) : async Bool {
+    assertOwner(caller);
+    let u = Store.getOrInitUser(users, caller);
+    Hooks.setEnabled(u, name, enabled)
+  };
 
   public shared ({ caller }) func tools_list() : async [Text] {
     assertOwner(caller);

@@ -24,6 +24,17 @@ export const idlFactory = ({ IDL }) => {
     'chainCodeHex' : IDL.Text,
   });
   const WalletResult = IDL.Variant({ 'ok' : AgentWallet, 'err' : IDL.Text });
+  const CkEthStatus = IDL.Record({
+    'hasIcpswapBroker' : IDL.Bool,
+    'hasKongswapBroker' : IDL.Bool,
+    'hasKongswapQuoteUrl' : IDL.Bool,
+    'hasIcpswapQuoteUrl' : IDL.Bool,
+  });
+  const DiscordStatus = IDL.Record({
+    'hasLlmConfig' : IDL.Bool,
+    'hasProxySecret' : IDL.Bool,
+    'configured' : IDL.Bool,
+  });
   const EcdsaPublicKeyOut = IDL.Record({
     'principal' : IDL.Principal,
     'derivationPathHex' : IDL.Vec(IDL.Text),
@@ -35,6 +46,20 @@ export const idlFactory = ({ IDL }) => {
   const EcdsaPublicKeyResult = IDL.Variant({
     'ok' : EcdsaPublicKeyOut,
     'err' : IDL.Text,
+  });
+  const HookAction = IDL.Variant({
+    'tool' : IDL.Record({ 'args' : IDL.Vec(IDL.Text), 'name' : IDL.Text }),
+    'reply' : IDL.Text,
+  });
+  const HookTrigger = IDL.Variant({
+    'command' : IDL.Text,
+    'messageContains' : IDL.Text,
+  });
+  const HookEntry = IDL.Record({
+    'action' : HookAction,
+    'trigger' : HookTrigger,
+    'name' : IDL.Text,
+    'enabled' : IDL.Bool,
   });
   const HeaderField = IDL.Tuple(IDL.Text, IDL.Text);
   const InHttpRequest = IDL.Record({
@@ -111,21 +136,61 @@ export const idlFactory = ({ IDL }) => {
   });
   const ToolResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const BalanceResult = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
+  const BuyCkEthResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const EthAddressResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const SendEthResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const SendIcpResult = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
   const SendIcrc1Result = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
   return IDL.Service({
+    'admin_has_provider_api_key' : IDL.Func([Provider], [IDL.Bool], ['query']),
+    'admin_set_cketh_broker' : IDL.Func([IDL.Opt(IDL.Text)], [], []),
+    'admin_set_cketh_brokers' : IDL.Func(
+        [IDL.Opt(IDL.Text), IDL.Opt(IDL.Text)],
+        [],
+        [],
+      ),
+    'admin_set_cketh_quote_sources' : IDL.Func(
+        [IDL.Opt(IDL.Text), IDL.Opt(IDL.Text)],
+        [],
+        [],
+      ),
+    'admin_set_discord' : IDL.Func([IDL.Opt(IDL.Text)], [], []),
     'admin_set_llm_opts' : IDL.Func([SendOptions], [], []),
+    'admin_set_provider_api_key' : IDL.Func([Provider, IDL.Text], [], []),
     'admin_set_tg' : IDL.Func([IDL.Text, IDL.Opt(IDL.Text)], [], []),
     'admin_tg_set_webhook' : IDL.Func([IDL.Text], [Result], []),
     'agent_wallet' : IDL.Func([], [WalletResult], []),
     'canister_principal' : IDL.Func([], [IDL.Principal], ['query']),
+    'cketh_status' : IDL.Func([], [CkEthStatus], []),
+    'discord_status' : IDL.Func([], [DiscordStatus], []),
     'ecdsa_public_key' : IDL.Func(
         [IDL.Vec(IDL.Vec(IDL.Nat8)), IDL.Opt(IDL.Text)],
         [EcdsaPublicKeyResult],
         [],
       ),
+    'hooks_delete' : IDL.Func([IDL.Text], [IDL.Bool], []),
+    'hooks_list' : IDL.Func([], [IDL.Vec(HookEntry)], []),
+    'hooks_put_command_reply' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Text],
+        [IDL.Bool],
+        [],
+      ),
+    'hooks_put_command_tool' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Text, IDL.Vec(IDL.Text)],
+        [IDL.Bool],
+        [],
+      ),
+    'hooks_put_message_reply' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Text],
+        [IDL.Bool],
+        [],
+      ),
+    'hooks_put_message_tool' : IDL.Func(
+        [IDL.Text, IDL.Text, IDL.Text, IDL.Vec(IDL.Text)],
+        [IDL.Bool],
+        [],
+      ),
+    'hooks_set_enabled' : IDL.Func([IDL.Text, IDL.Bool], [IDL.Bool], []),
     'http_request' : IDL.Func([InHttpRequest], [InHttpResponse], ['query']),
     'http_request_update' : IDL.Func([InHttpRequest], [InHttpResponse], []),
     'http_transform' : IDL.Func(
@@ -177,6 +242,8 @@ export const idlFactory = ({ IDL }) => {
       ),
     'wallet_balance_icp' : IDL.Func([], [BalanceResult], []),
     'wallet_balance_icrc1' : IDL.Func([IDL.Text], [BalanceResult], []),
+    'wallet_buy_cketh' : IDL.Func([IDL.Text, IDL.Nat64], [BuyCkEthResult], []),
+    'wallet_buy_cketh_one' : IDL.Func([IDL.Nat64], [BuyCkEthResult], []),
     'wallet_eth_address' : IDL.Func([], [EthAddressResult], []),
     'wallet_send_erc20' : IDL.Func(
         [IDL.Text, IDL.Opt(IDL.Text), IDL.Text, IDL.Text, IDL.Nat],

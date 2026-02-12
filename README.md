@@ -28,6 +28,7 @@
 - 钱包：支持发送 ICRC1 Token（传入 Ledger Principal + 目标 Principal + amount + 可选 fee）
 - 钱包：支持发送 ERC20（后端构造 `transfer(address,uint256)` 并签名广播）
 - 钱包：支持余额查询（ICP / ICRC1 / ETH / ERC20）
+- 钱包：支持按数量买 ckETH（例如 `0.5`），后端直接通过 HTTP 对比 ICPSwap/KongSwap 报价并优先选择更便宜的 venue
 - 钱包：`wallet_eth_address()` 由后端返回 Agent ETH 地址（前端不再本地推导）
 - 钱包：后端自动判断 ICP Ledger 网络（本地可用则走本地 ledger，否则回退主网 ledger）
 - 架构：业务逻辑后端化（签名、转账、余额与地址计算都在 canister），前端仅负责 UI 与调用
@@ -103,6 +104,10 @@
 	- `tools_list()`
 	- `tools_invoke(name, args)`
 - wallet
+	- `admin_set_cketh_broker(canisterText)`（兼容旧接口，等价于仅设置 icpswap broker）
+	- `admin_set_cketh_brokers(icpswapCanisterText, kongswapCanisterText)`
+	- `admin_set_cketh_quote_sources(icpswapQuoteUrl, kongswapQuoteUrl)`
+	- `cketh_status()`
 	- `canister_principal()`
 	- `agent_wallet()`
 	- `wallet_eth_address()`
@@ -110,6 +115,8 @@
 	- `wallet_send_icrc1(ledgerPrincipalText, toPrincipalText, amount, fee)`
 	- `wallet_send_eth_raw(network, rpcUrl, rawTxHex)`
 	- `wallet_send_eth(network, rpcUrl, toAddress, amountWei)`
+	- `wallet_buy_cketh(amountCkEthText, maxIcpE8s)`
+	- `wallet_buy_cketh_one(maxIcpE8s)`（兼容接口，等价于买 `1`）
 	- `wallet_send_erc20(network, rpcUrl, tokenAddress, toAddress, amount)`
 	- `wallet_balance_icp()`
 	- `wallet_balance_icrc1(ledgerPrincipalText)`
@@ -119,6 +126,19 @@
 	- `sign_with_ecdsa(messageHash, derivationPath, keyName)`
 
 说明：`wallet_send_eth` 使用后端 canister 直接调用系统 `ecdsa_public_key/sign_with_ecdsa` 完成签名与广播，不依赖 Chain Fusion Signer；前端关闭后，后端接口仍可由其他调用方触发。当前钱包相关能力（地址计算/余额查询/转账）均由后端执行。
+
+`wallet_buy_cketh` 会先直接拉取你配置的 ICPSwap/KongSwap 报价 URL，对比后选最便宜的 venue。
+
+- 报价 URL 推荐使用模板（后端会替换占位符）：
+	- `{amount}`：ckETH 数量（原始文本，例如 `0.5`）
+	- `{amountWei}`：ckETH 数量换算后的 wei（例如 `500000000000000000`）
+- 可选：如果你仍配置了 broker，则在比价后会尝试执行买入；未配置 broker 时返回 `quote_only=true`。
+
+- 若使用 broker，ICPSwap broker 与 KongSwap broker 需要实现统一接口：
+	- `quote_cketh(amountWei : nat) -> variant { ok : nat64; err : text }`（返回预估 ICP e8s）
+	- `buy_cketh(amountWei : nat, maxIcpE8s : nat64) -> variant { ok : text; err : text }`
+- 后端会选择 `expectedIcpE8s` 更低的 venue。
+- 示例：买 0.5 个 ckETH，可调用 `wallet_buy_cketh("0.5", maxIcpE8s)`。
 
 ## LLM 调用钱包接口（自然语言触发）
 
@@ -188,6 +208,12 @@
 	- Secret Token（可选）
 	- 默认 LLM provider/model/apiKey/system prompt
 	- Webhook URL
+	- ckETH 报价源 URL（ICPSwap/KongSwap）
+
+ckETH 报价源建议填写带占位符的 URL 模板（后端自动替换）：
+
+- `...amount={amount}`
+- `...amountWei={amountWei}`
 
 
 

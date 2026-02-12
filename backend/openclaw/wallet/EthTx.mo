@@ -12,10 +12,10 @@ import Result "mo:base/Result";
 import Text "mo:base/Text";
 import SHA3 "mo:sha3";
 
-import HttpTypes "./HttpTypes";
-import Json "./Json";
+import HttpTypes "../http/HttpTypes";
+import Json "../http/Json";
 import Wallet "./Wallet";
-import Llm "./Llm";
+import Llm "../llm/Llm";
 
 module {
   public type SendEthResult = Result.Result<Text, Text>;

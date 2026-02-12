@@ -7,8 +7,8 @@ import Nat64 "mo:base/Nat64";
 import Result "mo:base/Result";
 import Text "mo:base/Text";
 
-import HttpTypes "./HttpTypes";
-import Json "./Json";
+import HttpTypes "../http/HttpTypes";
+import Json "../http/Json";
 
 module {
   public type Http = actor { http_request : HttpTypes.HttpRequestArgs -> async HttpTypes.HttpResponsePayload };

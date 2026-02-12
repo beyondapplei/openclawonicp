@@ -64,6 +64,10 @@ const I18N = {
     needEthAmount: 'ETH 数量必须大于 0',
     authLoading: '身份初始化中…',
     notOwnerLogin: '不是 agent 的拥有者，不能登录',
+    skills: 'Skills',
+    selectedSkills: '启用 Skills',
+    loadSkills: '加载 Skills',
+    noSkills: '暂无 Skills',
   },
   en: {
     title: 'OpenClaw on ICP (minimal)',
@@ -127,6 +131,10 @@ const I18N = {
     needEthAmount: 'ETH amount must be greater than 0',
     authLoading: 'Initializing identity…',
     notOwnerLogin: 'Not the agent owner. Login denied.',
+    skills: 'Skills',
+    selectedSkills: 'Enabled Skills',
+    loadSkills: 'Load Skills',
+    noSkills: 'No skills',
   },
 };
 
@@ -166,6 +174,8 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [skills, setSkills] = useState([]);
+  const [selectedSkills, setSelectedSkills] = useState([]);
 
   function principalToText(p) {
     if (!p) return '';
@@ -222,9 +232,30 @@ export default function App() {
     setHistory(h);
   }
 
+  async function loadSkills(a = actor) {
+    if (!a || !isAuthed) {
+      setSkills([]);
+      setSelectedSkills([]);
+      return;
+    }
+    try {
+      const list = await a.skills_list();
+      setSkills(list);
+      setSelectedSkills((prev) => prev.filter((name) => list.includes(name)));
+    } catch (e) {
+      setStatus(`${t.exPrefix}${String(e)}`);
+    }
+  }
+
+  function toggleSkill(name) {
+    setSelectedSkills((prev) => {
+      if (prev.includes(name)) return prev.filter((n) => n !== name);
+      return [...prev, name];
+    });
+  }
+
   async function sendMessage() {
     if (!model.trim()) return setStatus(t.needModel);
-    if (!apiKey.trim()) return setStatus(t.needKey);
     if (!message.trim()) return setStatus(t.needMsg);
 
     setBusy(true);
@@ -237,7 +268,7 @@ export default function App() {
       systemPrompt: [],
       maxTokens: [],
       temperature: [],
-      skillNames: [],
+      skillNames: selectedSkills,
       includeHistory: true,
     };
 
@@ -319,6 +350,7 @@ export default function App() {
     if (!actor || !isAuthed) return;
     void refresh();
     void refreshWallet(actor);
+    void loadSkills(actor);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actor, isAuthed, authClient]);
 
@@ -524,6 +556,28 @@ export default function App() {
         <button type="button" onClick={() => void resetSession()} disabled={busy}>
           {t.reset}
         </button>
+      </div>
+
+      <div className="row" style={{ margin: '0 0 14px' }}>
+        <label>{t.selectedSkills}</label>
+        <button type="button" onClick={() => void loadSkills()} disabled={busy}>
+          {t.loadSkills}
+        </button>
+        {skills.length === 0 ? (
+          <span>{t.noSkills}</span>
+        ) : (
+          skills.map((name) => (
+            <label key={name} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <input
+                type="checkbox"
+                checked={selectedSkills.includes(name)}
+                onChange={() => toggleSkill(name)}
+                disabled={busy}
+              />
+              {name}
+            </label>
+          ))
+        )}
       </div>
 
       <div>

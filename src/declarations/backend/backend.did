@@ -129,6 +129,26 @@ type HttpHeader =
    name: text;
    value: text;
  };
+type HookTrigger = 
+ variant {
+   command: text;
+   messageContains: text;
+ };
+type HookEntry = 
+ record {
+   action: HookAction;
+   enabled: bool;
+   name: text;
+   trigger: HookTrigger;
+ };
+type HookAction = 
+ variant {
+   reply: text;
+   tool: record {
+           args: vec text;
+           name: text;
+         };
+ };
 type HeaderField = 
  record {
    text;
@@ -153,11 +173,29 @@ type EcdsaPublicKeyOut =
    principalText: text;
    publicKeyHex: text;
  };
+type DiscordStatus = 
+ record {
+   configured: bool;
+   hasLlmConfig: bool;
+   hasProxySecret: bool;
+ };
+type CkEthStatus = 
+ record {
+   hasIcpswapBroker: bool;
+   hasIcpswapQuoteUrl: bool;
+   hasKongswapBroker: bool;
+   hasKongswapQuoteUrl: bool;
+ };
 type ChatMessage = 
  record {
    content: text;
    role: Role;
    tsNs: int;
+ };
+type BuyCkEthResult = 
+ variant {
+   err: text;
+   ok: text;
  };
 type BalanceResult = 
  variant {
@@ -174,13 +212,32 @@ type AgentWallet =
    publicKeyHex: text;
  };
 service : {
+  admin_has_provider_api_key: (provider: Provider) -> (bool) query;
+  admin_set_cketh_broker: (canisterText: opt text) -> ();
+  admin_set_cketh_brokers: (icpswapCanisterText: opt text,
+   kongswapCanisterText: opt text) -> ();
+  admin_set_cketh_quote_sources: (icpswapQuoteUrl: opt text,
+   kongswapQuoteUrl: opt text) -> ();
+  admin_set_discord: (proxySecret: opt text) -> ();
   admin_set_llm_opts: (opts: SendOptions) -> ();
+  admin_set_provider_api_key: (provider: Provider, apiKey: text) -> ();
   admin_set_tg: (botToken: text, secretToken: opt text) -> ();
   admin_tg_set_webhook: (webhookUrl: text) -> (Result);
   agent_wallet: () -> (WalletResult);
   canister_principal: () -> (principal) query;
+  cketh_status: () -> (CkEthStatus);
+  discord_status: () -> (DiscordStatus);
   ecdsa_public_key: (derivationPath: vec blob, keyName: opt text) ->
    (EcdsaPublicKeyResult);
+  hooks_delete: (name: text) -> (bool);
+  hooks_list: () -> (vec HookEntry);
+  hooks_put_command_reply: (name: text, command: text, reply: text) -> (bool);
+  hooks_put_command_tool: (name: text, command: text, toolName: text,
+   toolArgs: vec text) -> (bool);
+  hooks_put_message_reply: (name: text, keyword: text, reply: text) -> (bool);
+  hooks_put_message_tool: (name: text, keyword: text, toolName: text,
+   toolArgs: vec text) -> (bool);
+  hooks_set_enabled: (name: text, enabled: bool) -> (bool);
   http_request: (req: InHttpRequest) -> (InHttpResponse) query;
   http_request_update: (req: InHttpRequest) -> (InHttpResponse);
   http_transform: (args: TransformArgs) -> (HttpResponsePayload) query;
@@ -207,6 +264,9 @@ service : {
   wallet_balance_eth: (network: text, rpcUrl: opt text) -> (BalanceResult);
   wallet_balance_icp: () -> (BalanceResult);
   wallet_balance_icrc1: (ledgerPrincipalText: text) -> (BalanceResult);
+  wallet_buy_cketh: (amountCkEthText: text, maxIcpE8s: nat64) ->
+   (BuyCkEthResult);
+  wallet_buy_cketh_one: (maxIcpE8s: nat64) -> (BuyCkEthResult);
   wallet_eth_address: () -> (EthAddressResult);
   wallet_send_erc20: (network: text, rpcUrl: opt text, tokenAddress: 
    text, toAddress: text, amount: nat) -> (SendEthResult);

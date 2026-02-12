@@ -5,8 +5,8 @@ import Result "mo:base/Result";
 import Text "mo:base/Text";
 
 import EthTx "./EthTx";
-import HttpTypes "./HttpTypes";
-import Llm "./Llm";
+import HttpTypes "../http/HttpTypes";
+import Llm "../llm/Llm";
 import Wallet "./Wallet";
 
 module {

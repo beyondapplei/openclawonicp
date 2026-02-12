@@ -12,10 +12,23 @@ export interface AgentWallet {
 }
 export type BalanceResult = { 'ok' : bigint } |
   { 'err' : string };
+export type BuyCkEthResult = { 'ok' : string } |
+  { 'err' : string };
 export interface ChatMessage {
   'content' : string,
   'role' : Role,
   'tsNs' : bigint,
+}
+export interface CkEthStatus {
+  'hasIcpswapBroker' : boolean,
+  'hasKongswapBroker' : boolean,
+  'hasKongswapQuoteUrl' : boolean,
+  'hasIcpswapQuoteUrl' : boolean,
+}
+export interface DiscordStatus {
+  'hasLlmConfig' : boolean,
+  'hasProxySecret' : boolean,
+  'configured' : boolean,
 }
 export interface EcdsaPublicKeyOut {
   'principal' : Principal,
@@ -30,6 +43,18 @@ export type EcdsaPublicKeyResult = { 'ok' : EcdsaPublicKeyOut } |
 export type EthAddressResult = { 'ok' : string } |
   { 'err' : string };
 export type HeaderField = [string, string];
+export type HookAction = {
+    'tool' : { 'args' : Array<string>, 'name' : string }
+  } |
+  { 'reply' : string };
+export interface HookEntry {
+  'action' : HookAction,
+  'trigger' : HookTrigger,
+  'name' : string,
+  'enabled' : boolean,
+}
+export type HookTrigger = { 'command' : string } |
+  { 'messageContains' : string };
 export interface HttpHeader { 'value' : string, 'name' : string }
 export interface HttpResponsePayload {
   'status' : bigint,
@@ -115,15 +140,42 @@ export interface TransformArgs {
 export type WalletResult = { 'ok' : AgentWallet } |
   { 'err' : string };
 export interface _SERVICE {
+  'admin_has_provider_api_key' : ActorMethod<[Provider], boolean>,
+  'admin_set_cketh_broker' : ActorMethod<[[] | [string]], undefined>,
+  'admin_set_cketh_brokers' : ActorMethod<
+    [[] | [string], [] | [string]],
+    undefined
+  >,
+  'admin_set_cketh_quote_sources' : ActorMethod<
+    [[] | [string], [] | [string]],
+    undefined
+  >,
+  'admin_set_discord' : ActorMethod<[[] | [string]], undefined>,
   'admin_set_llm_opts' : ActorMethod<[SendOptions], undefined>,
+  'admin_set_provider_api_key' : ActorMethod<[Provider, string], undefined>,
   'admin_set_tg' : ActorMethod<[string, [] | [string]], undefined>,
   'admin_tg_set_webhook' : ActorMethod<[string], Result>,
   'agent_wallet' : ActorMethod<[], WalletResult>,
   'canister_principal' : ActorMethod<[], Principal>,
+  'cketh_status' : ActorMethod<[], CkEthStatus>,
+  'discord_status' : ActorMethod<[], DiscordStatus>,
   'ecdsa_public_key' : ActorMethod<
     [Array<Uint8Array | number[]>, [] | [string]],
     EcdsaPublicKeyResult
   >,
+  'hooks_delete' : ActorMethod<[string], boolean>,
+  'hooks_list' : ActorMethod<[], Array<HookEntry>>,
+  'hooks_put_command_reply' : ActorMethod<[string, string, string], boolean>,
+  'hooks_put_command_tool' : ActorMethod<
+    [string, string, string, Array<string>],
+    boolean
+  >,
+  'hooks_put_message_reply' : ActorMethod<[string, string, string], boolean>,
+  'hooks_put_message_tool' : ActorMethod<
+    [string, string, string, Array<string>],
+    boolean
+  >,
+  'hooks_set_enabled' : ActorMethod<[string, boolean], boolean>,
   'http_request' : ActorMethod<[InHttpRequest], InHttpResponse>,
   'http_request_update' : ActorMethod<[InHttpRequest], InHttpResponse>,
   'http_transform' : ActorMethod<[TransformArgs], HttpResponsePayload>,
@@ -153,6 +205,8 @@ export interface _SERVICE {
   'wallet_balance_eth' : ActorMethod<[string, [] | [string]], BalanceResult>,
   'wallet_balance_icp' : ActorMethod<[], BalanceResult>,
   'wallet_balance_icrc1' : ActorMethod<[string], BalanceResult>,
+  'wallet_buy_cketh' : ActorMethod<[string, bigint], BuyCkEthResult>,
+  'wallet_buy_cketh_one' : ActorMethod<[bigint], BuyCkEthResult>,
   'wallet_eth_address' : ActorMethod<[], EthAddressResult>,
   'wallet_send_erc20' : ActorMethod<
     [string, [] | [string], string, string, bigint],
