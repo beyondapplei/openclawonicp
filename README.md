@@ -13,6 +13,7 @@
 - `skills_*`：简化版技能仓库（写入/读取/列表/删除），发送时可选择注入到 system prompt
 - `tools_*`：链上安全的极简工具（KV 读写、取当前时间）
 - LLM：支持 OpenAI / Anthropic 的 HTTPS outcalls（`sessions_send` 内部调用）
+- LLM：支持 OpenAI / Anthropic / Google (Gemini, AI Studio) 的 HTTPS outcalls（`sessions_send` 内部调用）
 - WebChat：网页聊天 UI，可选择 provider/model、填写 API Key、查看历史、重置会话
 - 语言切换：右上角按钮切换中文/英文（仅切换界面文案）
 
@@ -62,6 +63,7 @@
 
 - HTTPS outcalls 会消耗 cycles
 - 本项目当前把 API Key 作为 `sessions_send` 参数从前端传入（最简单，但 key 会出现在 canister 调用参数中）；生产环境建议改为更安全的密钥管理方案
+- Google (Gemini) 的 key 可从 AI Studio 获取；本项目通过 Generative Language API `v1beta/models/{model}:generateContent` 调用
 
 ## 后端 API（概览）
 

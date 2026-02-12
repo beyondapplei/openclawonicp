@@ -29,6 +29,16 @@ module {
     }
   };
 
+  public func extractStringAfterAny(raw : Text, needles : [Text]) : ?Text {
+    for (n in needles.vals()) {
+      switch (extractStringAfter(raw, n)) {
+        case null {};
+        case (?v) { return ?v };
+      }
+    };
+    null
+  };
+
   func readJsonStringFromText(after : Text) : ?Text {
     let pieces = Buffer.Buffer<Text>(16);
     let cs = after.chars();

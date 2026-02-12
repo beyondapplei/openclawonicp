@@ -45,6 +45,7 @@ type Role =
 type Provider = 
  variant {
    anthropic;
+   google;
    openai;
  };
 type HttpResponsePayload = 

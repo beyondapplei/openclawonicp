@@ -1,7 +1,7 @@
 import Result "mo:base/Result";
 
 module {
-  public type Provider = { #openai; #anthropic };
+  public type Provider = { #openai; #anthropic; #google };
   public type Role = { #system_; #user; #assistant; #tool };
 
   public type ChatMessage = {

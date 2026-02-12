@@ -25,7 +25,11 @@ export const idlFactory = ({ IDL }) => {
     'updatedAtNs' : IDL.Int,
     'messageCount' : IDL.Nat,
   });
-  const Provider = IDL.Variant({ 'openai' : IDL.Null, 'anthropic' : IDL.Null });
+  const Provider = IDL.Variant({
+    'openai' : IDL.Null,
+    'google' : IDL.Null,
+    'anthropic' : IDL.Null,
+  });
   const SendOptions = IDL.Record({
     'model' : IDL.Text,
     'provider' : Provider,

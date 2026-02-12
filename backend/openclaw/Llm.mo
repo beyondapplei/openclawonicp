@@ -15,8 +15,9 @@ module {
 
   public func extract(provider : Types.Provider, raw : Text) : ?Text {
     switch (provider) {
-      case (#openai) Json.extractStringAfter(raw, "\"content\":\"");
-      case (#anthropic) Json.extractStringAfter(raw, "\"text\":\"");
+      case (#openai) Json.extractStringAfterAny(raw, ["\"content\":\"", "\"content\": \""]);
+      case (#anthropic) Json.extractStringAfterAny(raw, ["\"text\":\"", "\"text\": \""]);
+      case (#google) Json.extractStringAfterAny(raw, ["\"text\":\"", "\"text\": \""]);
     }
   };
 
@@ -35,6 +36,7 @@ module {
     let (url, headers, bodyText) = switch (provider) {
       case (#openai) buildOpenAIRequest(model, apiKey, sysPrompt, history, maxTokens, temperature);
       case (#anthropic) buildAnthropicRequest(model, apiKey, sysPrompt, history, maxTokens, temperature);
+      case (#google) buildGoogleRequest(model, apiKey, sysPrompt, history, maxTokens, temperature);
     };
 
     let req : HttpTypes.HttpRequestArgs = {
@@ -115,6 +117,34 @@ module {
     (url, headers, body)
   };
 
+  func buildGoogleRequest(
+    model : Text,
+    apiKey : Text,
+    sysPrompt : Text,
+    history : [Types.ChatMessage],
+    maxTokens : ?Nat,
+    temperature : ?Float,
+  ) : (Text, [HttpTypes.HttpHeader], Text) {
+    // Google AI Studio / Gemini (Generative Language API)
+    // Endpoint: /v1beta/models/{model}:generateContent?key=...
+    let url = "https://generativelanguage.googleapis.com/v1beta/models/" # model # ":generateContent?key=" # apiKey;
+    let headers : [HttpTypes.HttpHeader] = [
+      { name = "Content-Type"; value = "application/json" },
+    ];
+
+    let contentsJson = messagesToGoogleJson(history);
+    let genCfg = generationConfigJson(maxTokens, temperature);
+
+    let body = "{" #
+      (if (Text.size(sysPrompt) > 0)
+        "\"systemInstruction\":{\"parts\":[{\"text\":\"" # Json.escape(sysPrompt) # "\"}]},"
+        else "") #
+      "\"contents\":" # contentsJson #
+      genCfg #
+      "}";
+    (url, headers, body)
+  };
+
   func optNatField(field : Text, v : ?Nat) : Text {
     switch (v) {
       case null "";
@@ -127,6 +157,29 @@ module {
       case null "";
       case (?f) ",\"" # field # "\":" # Float.toText(f);
     }
+  };
+
+  func generationConfigJson(maxTokens : ?Nat, temperature : ?Float) : Text {
+    if (maxTokens == null and temperature == null) return "";
+    let maxField = switch (maxTokens) {
+      case null "";
+      case (?n) "\"maxOutputTokens\":" # Nat.toText(n);
+    };
+    let tempField = switch (temperature) {
+      case null "";
+      case (?t) "\"temperature\":" # Float.toText(t);
+    };
+
+    let inner =
+      if (Text.size(maxField) > 0 and Text.size(tempField) > 0) {
+        maxField # "," # tempField
+      } else if (Text.size(maxField) > 0) {
+        maxField
+      } else {
+        tempField
+      };
+
+    ",\"generationConfig\":{" # inner # "}"
   };
 
   func messagesToOpenAIJson(sysPrompt : Text, history : [Types.ChatMessage]) : Text {
@@ -155,6 +208,23 @@ module {
         };
         case (#assistant) {
           parts.add("{\"role\":\"assistant\",\"content\":\"" # Json.escape(m.content) # "\"}");
+        };
+        case (_) {};
+      }
+    };
+    "[" # Text.join(",", parts.vals()) # "]"
+  };
+
+  func messagesToGoogleJson(history : [Types.ChatMessage]) : Text {
+    // Google uses roles: "user" and "model".
+    let parts = Buffer.Buffer<Text>(history.size());
+    for (m in history.vals()) {
+      switch (m.role) {
+        case (#user) {
+          parts.add("{\"role\":\"user\",\"parts\":[{\"text\":\"" # Json.escape(m.content) # "\"}]}");
+        };
+        case (#assistant) {
+          parts.add("{\"role\":\"model\",\"parts\":[{\"text\":\"" # Json.escape(m.content) # "\"}]}");
         };
         case (_) {};
       }

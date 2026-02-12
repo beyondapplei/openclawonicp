@@ -49,7 +49,9 @@ const I18N = {
 };
 
 function providerVariant(provider) {
-  return provider === 'anthropic' ? { anthropic: null } : { openai: null };
+  if (provider === 'anthropic') return { anthropic: null };
+  if (provider === 'google') return { google: null };
+  return { openai: null };
 }
 
 function toMs(tsNs) {
@@ -136,6 +138,11 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    // Provide a sensible default when switching provider.
+    if (provider === 'google' && model === 'gpt-4o-mini') setModel('gemini-1.5-flash');
+  }, [provider]);
+
   return (
     <main>
       <div className="langToggle">
@@ -160,6 +167,7 @@ export default function App() {
         <select id="provider" value={provider} onChange={(e) => setProvider(e.target.value)}>
           <option value="openai">OpenAI</option>
           <option value="anthropic">Anthropic</option>
+          <option value="google">Google (Gemini)</option>
         </select>
 
         <label htmlFor="model">{t.model}</label>

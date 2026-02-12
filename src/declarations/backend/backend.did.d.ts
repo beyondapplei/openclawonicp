@@ -14,6 +14,7 @@ export interface HttpResponsePayload {
   'headers' : Array<HttpHeader>,
 }
 export type Provider = { 'openai' : null } |
+  { 'google' : null } |
   { 'anthropic' : null };
 export type Role = { 'tool' : null } |
   { 'user' : null } |
