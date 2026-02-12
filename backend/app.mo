@@ -17,8 +17,8 @@ import Tools "./openclaw/Tools";
 import Telegram "./openclaw/Telegram";
 import Types "./openclaw/Types";
 import Wallet "./openclaw/Wallet";
-import EthTx "./openclaw/EthTx";
-import TokenTransfer "./openclaw/TokenTransfer";
+import WalletIcp "./openclaw/WalletIcp";
+import WalletEvm "./openclaw/WalletEvm";
 import Migration "migration";
 
 persistent actor OpenClawOnICP {
@@ -264,7 +264,7 @@ persistent actor OpenClawOnICP {
         let tgUser = Principal.fromActor(OpenClawOnICP);
         let sessionId = "tg:" # Nat.toText(u.chatId);
 
-        let sendRes = await Sessions.send(users, tgUser, sessionId, u.text, opts, nowNs, modelCaller);
+        let sendRes = await Sessions.send(users, tgUser, sessionId, u.text, opts, nowNs, modelCaller, ?toolCaller);
         switch (sendRes) {
           case (#err(_)) {};
           case (#ok(ok)) {
@@ -320,28 +320,6 @@ persistent actor OpenClawOnICP {
 
   func nowNs() : Int { Time.now() };
 
-  type Icrc1FeeProbe = actor {
-    icrc1_fee : shared () -> async Nat;
-  };
-
-  func isLedgerReachable(ledgerPrincipal : Principal) : async Bool {
-    let ledger : Icrc1FeeProbe = actor (Principal.toText(ledgerPrincipal));
-    try {
-      ignore await ledger.icrc1_fee();
-      true
-    } catch (_) {
-      false
-    }
-  };
-
-  func resolveIcpLedgerPrincipal() : async Principal {
-    if (await isLedgerReachable(icpLedgerLocalPrincipal)) {
-      icpLedgerLocalPrincipal
-    } else {
-      icpLedgerMainnetPrincipal
-    }
-  };
-
   public shared ({ caller }) func whoami() : async Text {
     assertOwner(caller);
     Principal.toText(caller)
@@ -349,17 +327,17 @@ persistent actor OpenClawOnICP {
 
   public shared ({ caller }) func ecdsa_public_key(derivationPath : [Blob], keyName : ?Text) : async EcdsaPublicKeyResult {
     assertOwner(caller);
-    await Wallet.ecdsaPublicKey(ic00, caller, Principal.fromActor(OpenClawOnICP), derivationPath, keyName)
+    await WalletEvm.ecdsaPublicKey(ic00, caller, Principal.fromActor(OpenClawOnICP), derivationPath, keyName)
   };
 
   public shared ({ caller }) func sign_with_ecdsa(messageHash : Blob, derivationPath : [Blob], keyName : ?Text) : async SignWithEcdsaResult {
     assertOwner(caller);
-    await Wallet.signWithEcdsa(ic00, caller, messageHash, derivationPath, keyName)
+    await WalletEvm.signWithEcdsa(ic00, caller, messageHash, derivationPath, keyName)
   };
 
   public shared ({ caller }) func agent_wallet() : async WalletResult {
     assertOwner(caller);
-    await Wallet.agentWallet(ic00, caller, Principal.fromActor(OpenClawOnICP))
+    await WalletEvm.agentWallet(ic00, caller, Principal.fromActor(OpenClawOnICP))
   };
 
   public shared query ({ caller }) func canister_principal() : async Principal {
@@ -369,49 +347,37 @@ persistent actor OpenClawOnICP {
 
   public shared ({ caller }) func wallet_send_icp(toPrincipalText : Text, amountE8s : Nat64) : async SendIcpResult {
     assertOwner(caller);
-    let ledgerPrincipal = await resolveIcpLedgerPrincipal();
-    await TokenTransfer.send(ledgerPrincipal, toPrincipalText, Nat64.toNat(amountE8s), null, null, null)
+    await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toPrincipalText, amountE8s)
   };
 
   public shared ({ caller }) func wallet_send_icrc1(ledgerPrincipalText : Text, toPrincipalText : Text, amount : Nat, fee : ?Nat) : async SendIcrc1Result {
     assertOwner(caller);
-    let ledgerPrincipal : Principal = try {
-      Principal.fromText(Text.trim(ledgerPrincipalText, #char ' '))
-    } catch (_) {
-      return #err("invalid ledger principal")
-    };
-    await TokenTransfer.send(ledgerPrincipal, toPrincipalText, amount, fee, null, null)
+    await WalletIcp.sendIcrc1(ledgerPrincipalText, toPrincipalText, amount, fee)
   };
 
   public shared ({ caller }) func wallet_balance_icp() : async BalanceResult {
     assertOwner(caller);
-    let ledgerPrincipal = await resolveIcpLedgerPrincipal();
-    await TokenTransfer.balance(ledgerPrincipal, Principal.fromActor(OpenClawOnICP))
+    await WalletIcp.balanceIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, Principal.fromActor(OpenClawOnICP))
   };
 
   public shared ({ caller }) func wallet_balance_icrc1(ledgerPrincipalText : Text) : async BalanceResult {
     assertOwner(caller);
-    let ledgerPrincipal : Principal = try {
-      Principal.fromText(Text.trim(ledgerPrincipalText, #char ' '))
-    } catch (_) {
-      return #err("invalid ledger principal")
-    };
-    await TokenTransfer.balance(ledgerPrincipal, Principal.fromActor(OpenClawOnICP))
+    await WalletIcp.balanceIcrc1(ledgerPrincipalText, Principal.fromActor(OpenClawOnICP))
   };
 
   public shared ({ caller }) func wallet_send_eth_raw(network : Text, rpcUrl : ?Text, rawTxHex : Text) : async SendEthResult {
     assertOwner(caller);
-    await EthTx.sendRaw(ic, http_transform, defaultHttpCycles, network, rpcUrl, rawTxHex)
+    await WalletEvm.sendRaw(ic, http_transform, defaultHttpCycles, network, rpcUrl, rawTxHex)
   };
 
   public shared ({ caller }) func wallet_eth_address() : async EthAddressResult {
     assertOwner(caller);
-    await EthTx.ethAddress(ic00, caller, Principal.fromActor(OpenClawOnICP))
+    await WalletEvm.ethAddress(ic00, caller, Principal.fromActor(OpenClawOnICP))
   };
 
   public shared ({ caller }) func wallet_send_eth(network : Text, rpcUrl : ?Text, toAddress : Text, amountWei : Nat) : async SendEthResult {
     assertOwner(caller);
-    await EthTx.send(
+    await WalletEvm.send(
       ic,
       http_transform,
       defaultHttpCycles,
@@ -427,7 +393,7 @@ persistent actor OpenClawOnICP {
 
   public shared ({ caller }) func wallet_send_erc20(network : Text, rpcUrl : ?Text, tokenAddress : Text, toAddress : Text, amount : Nat) : async SendEthResult {
     assertOwner(caller);
-    await EthTx.sendErc20(
+    await WalletEvm.sendErc20(
       ic,
       http_transform,
       defaultHttpCycles,
@@ -444,7 +410,7 @@ persistent actor OpenClawOnICP {
 
   public shared ({ caller }) func wallet_balance_eth(network : Text, rpcUrl : ?Text) : async BalanceResult {
     assertOwner(caller);
-    await EthTx.balanceEth(
+    await WalletEvm.balanceEth(
       ic,
       http_transform,
       defaultHttpCycles,
@@ -458,7 +424,7 @@ persistent actor OpenClawOnICP {
 
   public shared ({ caller }) func wallet_balance_erc20(network : Text, rpcUrl : ?Text, tokenAddress : Text) : async BalanceResult {
     assertOwner(caller);
-    await EthTx.balanceErc20(
+    await WalletEvm.balanceErc20(
       ic,
       http_transform,
       defaultHttpCycles,
@@ -526,9 +492,31 @@ persistent actor OpenClawOnICP {
     await Llm.callModel(ic, http_transform, defaultHttpCycles, provider, model, apiKey, sysPrompt, history, maxTokens, temperature)
   };
 
+    func toolCaller(name : Text, args : [Text]) : async ToolResult {
+      switch (name) {
+        case ("wallet_send_icp") {
+          if (args.size() < 2) return #err("wallet_send_icp requires args: to_principal, amount_e8s");
+          let toPrincipalText = Text.trim(args[0], #char ' ');
+          let amountNat : Nat = switch (Nat.fromText(Text.trim(args[1], #char ' '))) {
+            case null return #err("invalid amount_e8s");
+            case (?v) v;
+          };
+          if (amountNat > 18_446_744_073_709_551_615) return #err("amount_e8s overflow nat64");
+          let amountE8s : Nat64 = Nat64.fromNat(amountNat);
+          if (Text.size(toPrincipalText) == 0 or amountE8s == 0) {
+            return #err("invalid tool args");
+          };
+          switch (await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toPrincipalText, amountE8s)) {
+            case (#ok(blockIndex)) #ok(Nat.toText(blockIndex));
+            case (#err(e)) #err(e);
+          }
+        };
+        case (_) #err("unknown tool")
+      }
+    };
   public shared ({ caller }) func sessions_send(sessionId : Text, message : Text, opts : SendOptions) : async SendResult {
     assertOwner(caller);
-    await Sessions.send(users, caller, sessionId, message, opts, nowNs, modelCaller)
+     await Sessions.send(users, caller, sessionId, message, opts, nowNs, modelCaller, ?toolCaller)
   };
 
   // -----------------------------

@@ -43,6 +43,8 @@
 	- Llm.mo：OpenAI/Anthropic 请求构造与 outcall
 	- Json.mo：JSON escape + 定向解析（抽取 content/text）
 	- TokenTransfer.mo：ICRC1/ICP 转账
+	- WalletIcp.mo：ICP/ICRC1 钱包能力（发币、余额、本地/主网 ledger 自动判断）
+	- WalletEvm.mo：EVM 钱包能力（ETH/ERC20 地址、发送、余额）
 	- EthTx.mo：ETH 构造、签名与广播
 - 前端：frontend/
 	- index.html：React 挂载点
@@ -117,6 +119,27 @@
 	- `sign_with_ecdsa(messageHash, derivationPath, keyName)`
 
 说明：`wallet_send_eth` 使用后端 canister 直接调用系统 `ecdsa_public_key/sign_with_ecdsa` 完成签名与广播，不依赖 Chain Fusion Signer；前端关闭后，后端接口仍可由其他调用方触发。当前钱包相关能力（地址计算/余额查询/转账）均由后端执行。
+
+## LLM 调用钱包接口（自然语言触发）
+
+本项目已打通 `sessions_send` -> LLM -> 后端工具执行链路，可由自然语言触发 `wallet_send_icp`。
+
+- 当前支持工具：`wallet_send_icp`
+- 触发目标：当用户表达“给某个 Principal 转 ICP”时，模型会输出内部工具指令并由后端执行。
+
+### 用法示例
+
+- 你对 LLM 说：`发给 xxxxxxx 1 ICP`
+- 后端流程：
+	1. LLM 生成工具调用行（内部格式）
+	2. `Sessions.mo` 解析为 `wallet_send_icp(to_principal, amount_e8s)`
+	3. `app.mo` 中工具执行器调用 `WalletIcp.sendIcp(...)`
+	4. 返回链上结果（成功时含区块号）
+
+### 说明
+
+- 金额按 e8s 执行：`1 ICP = 100000000 e8s`
+- 若 Principal 无效、余额不足、权限不满足，会返回错误信息
 
 ## Telegram 接入（Bot Webhook）
 

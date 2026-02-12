@@ -207,7 +207,140 @@ body.walletFullscreenBody {
 .walletPage {
   min-height: 100vh;
   width: 100%;
-  padding: 24px;
+  padding: 18px;
+}
+
+.walletTopBar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.walletNetSelect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.walletNetSelect span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.walletNetSelect select {
+  min-width: 180px;
+}
+
+.walletHero {
+  background: linear-gradient(180deg, #4a16c9 0%, #32118f 100%);
+  border-color: rgba(188, 160, 255, 0.32);
+  border-radius: 22px;
+  margin-bottom: 14px;
+  text-align: center;
+  padding: 24px 18px 16px;
+}
+
+.walletHeroBalance {
+  font-size: 46px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.8px;
+}
+
+.walletHeroSub {
+  margin-top: 10px;
+  color: rgba(245, 239, 255, 0.82);
+  font-size: 14px;
+}
+
+.walletHeroActions {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.walletHeroActions button {
+  border-radius: 14px;
+  border-color: rgba(228, 212, 255, 0.2);
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.walletTokenArea {
+  border-radius: 20px;
+  padding: 14px;
+}
+
+.walletTokenTabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.walletTokenTabs button.active {
+  border-color: rgba(108, 198, 255, 0.55);
+}
+
+.walletTokenTabs button:last-child {
+  margin-left: auto;
+}
+
+.walletTokenList {
+  display: grid;
+  gap: 8px;
+}
+
+.walletTokenRow {
+  border: 1px solid rgba(141, 183, 255, 0.18);
+  background: rgba(6, 14, 34, 0.58);
+  border-radius: 14px;
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.walletTokenLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.walletTokenIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(145deg, #5c8dff, #27d0ff);
+}
+
+.walletTokenMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.walletTokenMeta strong {
+  font-size: 15px;
+}
+
+.walletTokenMeta span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.walletTokenBalance {
+  font-size: 18px;
 }
 
 .walletHeader {
@@ -352,6 +485,28 @@ body.walletFullscreenBody {
 @media (max-width: 720px) {
   .walletPage {
     padding: 14px;
+  }
+
+  .walletTopBar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .walletNetSelect {
+    justify-content: space-between;
+  }
+
+  .walletNetSelect select {
+    min-width: 0;
+    width: 65%;
+  }
+
+  .walletHeroBalance {
+    font-size: 34px;
+  }
+
+  .walletHeroActions {
+    grid-template-columns: 1fr;
   }
 
   .walletHeader {

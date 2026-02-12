@@ -3,7 +3,7 @@ import { initAuth, loginWithII, logoutII } from './auth';
 
 const I18N = {
   zh: {
-    title: 'OpenClaw on ICP（最小可用）',
+    title: 'OpenClaw on ICP（极简版）',
     session: '会话',
     provider: '提供方',
     model: '模型',
@@ -29,7 +29,7 @@ const I18N = {
     wallet: '钱包',
     principal: 'Principal',
     canisterId: '后端 Canister ID',
-    icpRecv: 'ICP 接受地址',
+    icpRecv: 'Agent ICP 接收地址',
     ethWallet: 'Agent ETH 钱包',
     toPrincipal: '目标 Principal',
     amountE8s: '金额 (e8s)',

@@ -370,15 +370,72 @@ module {
         switch (hexToBytes(w.publicKeyHex)) {
           case null #err("invalid public key hex");
           case (?pub) {
-            if (pub.size() != 65) return #err("unexpected public key length");
-            if (pub[0] != 0x04) return #err("unexpected public key format");
-            let hash = keccak256(slice(pub, 1, 65));
+            let uncompressedNoPrefix = switch (secp256k1UncompressedNoPrefix(pub)) {
+              case (#ok(v)) v;
+              case (#err(e2)) return #err(e2);
+            };
+            let hash = keccak256(uncompressedNoPrefix);
             let addr = slice(hash, 12, 32);
             #ok("0x" # bytesToHex(addr));
           };
         }
       };
     }
+  };
+
+  func secp256k1UncompressedNoPrefix(pub : [Nat8]) : Result.Result<[Nat8], Text> {
+    if (pub.size() == 65) {
+      if (pub[0] != 0x04) return #err("unexpected uncompressed public key format");
+      return #ok(slice(pub, 1, 65));
+    };
+
+    if (pub.size() == 33) {
+      let prefix = pub[0];
+      if (prefix != 0x02 and prefix != 0x03) return #err("unexpected compressed public key format");
+      let xBytes = slice(pub, 1, 33);
+      let x = bytesToNat(xBytes);
+      let p = secp256k1P();
+      if (x >= p) return #err("invalid compressed public key x");
+
+      let ySquared = (modMul(modMul(x, x, p), x, p) + 7) % p;
+      let yRoot = modExp(ySquared, (p + 1) / 4, p);
+      if (modMul(yRoot, yRoot, p) != ySquared) return #err("invalid compressed public key point");
+
+      let wantOdd = (prefix == 0x03);
+      let rootOdd = (yRoot % 2 == 1);
+      let y = if (rootOdd == wantOdd) {
+        yRoot
+      } else {
+        if (yRoot <= p) {
+          (p - yRoot) % p
+        } else {
+          return #err("invalid compressed public key root");
+        }
+      };
+
+      return #ok(Array.append<Nat8>(natToFixed32(x), natToFixed32(y)));
+    };
+
+    #err("unexpected public key length")
+  };
+
+  func modMul(a : Nat, b : Nat, m : Nat) : Nat {
+    (a * b) % m
+  };
+
+  func modExp(base : Nat, exp : Nat, m : Nat) : Nat {
+    if (m == 1) return 0;
+    var result : Nat = 1;
+    var b = base % m;
+    var e = exp;
+    while (e > 0) {
+      if (e % 2 == 1) {
+        result := modMul(result, b, m);
+      };
+      b := modMul(b, b, m);
+      e /= 2;
+    };
+    result
   };
 
   func keccak256(bytes : [Nat8]) : [Nat8] {
@@ -551,6 +608,13 @@ module {
     switch (hexToNat("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141")) {
       case (?n) n;
       case null Debug.trap("invalid secp256k1 curve order");
+    }
+  };
+
+  func secp256k1P() : Nat {
+    switch (hexToNat("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F")) {
+      case (?p) p;
+      case null Debug.trap("invalid secp256k1 field prime");
     }
   };
 

@@ -12,7 +12,7 @@ const I18N = {
     logout: '退出登录',
     authLoading: '身份初始化中…',
     principal: 'Principal',
-    icpRecv: 'ICP 接受地址',
+    icpRecv: 'Agent ICP 接收地址',
     ethWallet: 'Agent ETH 钱包',
     balances: '资产',
     refreshBalances: '刷新余额',
@@ -51,6 +51,22 @@ const I18N = {
     needEthAmount: 'ETH 数量必须大于 0',
     status: '状态',
     notOwnerLogin: '不是 agent 的拥有者，不能登录',
+    network: '网络',
+    tokenTab: '代币',
+    nftTab: 'NFT',
+    totalBalance: '总资产',
+    receive: '接收',
+    send: '发送',
+    swap: '兑换',
+    copied: '地址已复制',
+    noAddress: '当前网络暂无可用地址',
+    networkIc: 'Internet Computer',
+    networkEth: 'Ethereum',
+    networkBase: 'Base',
+    tokenIcpName: 'Internet Computer',
+    tokenIcrc1Name: 'ICRC1 Token',
+    tokenEthName: 'Ethereum',
+    tokenErc20Name: 'ERC20 Token',
   },
   en: {
     title: 'Wallet',
@@ -100,6 +116,22 @@ const I18N = {
     needEthAmount: 'ETH amount must be greater than 0',
     status: 'Status',
     notOwnerLogin: 'Not the agent owner. Login denied.',
+    network: 'Network',
+    tokenTab: 'Token',
+    nftTab: 'NFT',
+    totalBalance: 'Total Balance',
+    receive: 'Receive',
+    send: 'Send',
+    swap: 'Swap',
+    copied: 'Address copied',
+    noAddress: 'No available address on this network',
+    networkIc: 'Internet Computer',
+    networkEth: 'Ethereum',
+    networkBase: 'Base',
+    tokenIcpName: 'Internet Computer',
+    tokenIcrc1Name: 'ICRC1 Token',
+    tokenEthName: 'Ethereum',
+    tokenErc20Name: 'ERC20 Token',
   },
 };
 
@@ -115,6 +147,7 @@ export default function WalletApp() {
   const [ethWallet, setEthWallet] = useState('');
   const [authLoading, setAuthLoading] = useState(true);
   const [ownerPrincipalText, setOwnerPrincipalText] = useState('');
+  const [viewNetwork, setViewNetwork] = useState('internet_computer');
 
   const [sendToPrincipal, setSendToPrincipal] = useState('');
   const [sendAmountE8s, setSendAmountE8s] = useState('');
@@ -228,7 +261,7 @@ export default function WalletApp() {
     void refreshWallet(actor);
     void refreshBalances(actor);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [actor, isAuthed, authClient]);
+  }, [actor, isAuthed, authClient, viewNetwork]);
 
   async function login() {
     if (!authClient) return;
@@ -317,6 +350,8 @@ export default function WalletApp() {
 
     setBusy(true);
     try {
+      const effectiveEthNetwork = viewNetwork === 'base' ? 'base' : 'ethereum';
+
       const icpRes = await a.wallet_balance_icp();
       if ('ok' in icpRes) {
         setBalIcp(icpRes.ok.toString());
@@ -325,7 +360,7 @@ export default function WalletApp() {
         setStatus(`${t.errPrefix}${icpRes.err}`);
       }
 
-      const ethRes = await a.wallet_balance_eth(ethNetwork, ethRpcUrl.trim() ? [ethRpcUrl.trim()] : []);
+      const ethRes = await a.wallet_balance_eth(effectiveEthNetwork, ethRpcUrl.trim() ? [ethRpcUrl.trim()] : []);
       if ('ok' in ethRes) setBalEth(ethRes.ok.toString());
 
       if (icrc1LedgerPrincipal.trim()) {
@@ -341,7 +376,7 @@ export default function WalletApp() {
 
       if (erc20TokenAddress.trim()) {
         const erc20Res = await a.wallet_balance_erc20(
-          ethNetwork,
+          effectiveEthNetwork,
           ethRpcUrl.trim() ? [ethRpcUrl.trim()] : [],
           erc20TokenAddress.trim(),
         );
@@ -508,6 +543,44 @@ export default function WalletApp() {
 
   const canAccess = !!(isAuthed && principalText && ownerPrincipalText && principalText === ownerPrincipalText);
   const showLoginOnly = !authLoading && !canAccess;
+  const networkOptions = [
+    { value: 'internet_computer', label: t.networkIc },
+    { value: 'ethereum', label: t.networkEth },
+    { value: 'base', label: t.networkBase },
+  ];
+
+  const tokenRows = viewNetwork === 'internet_computer'
+    ? [
+      { symbol: 'ICP', name: t.tokenIcpName, balance: balIcp },
+      { symbol: 'ICRC1', name: t.tokenIcrc1Name, balance: balIcrc1 },
+    ]
+    : [
+      { symbol: 'ETH', name: t.tokenEthName, balance: balEth },
+      { symbol: 'ERC20', name: t.tokenErc20Name, balance: balErc20 },
+    ];
+
+  const heroBalance = tokenRows.some((v) => v.balance !== '-') ? tokenRows.map((v) => v.balance).join(' · ') : '--';
+  const receiveAddress = viewNetwork === 'internet_computer' ? canisterPrincipalText : ethWallet;
+
+  async function copyReceiveAddress() {
+    if (!receiveAddress) {
+      setStatus(t.noAddress);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(receiveAddress);
+      setStatus(t.copied);
+    } catch (_) {
+      setStatus(t.noAddress);
+    }
+  }
+
+  function onSwitchNetwork(nextNetwork) {
+    setViewNetwork(nextNetwork);
+    if (nextNetwork === 'ethereum' || nextNetwork === 'base') {
+      setEthNetwork(nextNetwork);
+    }
+  }
 
   if (showLoginOnly) {
     return (
@@ -522,10 +595,14 @@ export default function WalletApp() {
 
   return (
     <div className="walletPage">
-      <header className="walletHeader">
-        <div>
-          <h1>{t.title}</h1>
-          <p>{t.subtitle}</p>
+      <header className="walletTopBar">
+        <div className="walletNetSelect">
+          <span>{t.network}</span>
+          <select value={viewNetwork} onChange={(e) => onSwitchNetwork(e.target.value)}>
+            {networkOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
         </div>
         <div className="walletHeaderActions">
           {!authLoading && (
@@ -540,130 +617,38 @@ export default function WalletApp() {
         </div>
       </header>
 
-      <div className="walletLayout">
-        <aside className="walletSidebar panel">
-          {authLoading ? (
-            <div className="status">{t.authLoading}</div>
-          ) : (
-            <>
-              <div className="walletField"><span>{t.icpRecv}</span><strong>{canisterPrincipalText || '-'}</strong></div>
-              <div className="walletField"><span>{t.ethWallet}</span><strong>{ethWallet || '-'}</strong></div>
-            </>
-          )}
-          <div className="walletBalanceHeader">
-            <h3>{t.balances}</h3>
-            <button type="button" onClick={() => void refreshBalances()} disabled={busy || !isAuthed}>{t.refreshBalances}</button>
-          </div>
-          <div className="walletBalances">
-            <div><span>{t.balIcp}</span><strong>{balIcp}</strong></div>
-            <div><span>{t.balEth}</span><strong>{balEth}</strong></div>
-            <div><span>{t.balIcrc1}</span><strong>{balIcrc1}</strong></div>
-            <div><span>{t.balErc20}</span><strong>{balErc20}</strong></div>
-          </div>
-        </aside>
+      <section className="walletHero panel">
+        <div className="walletHeroBalance">{heroBalance}</div>
+        <div className="walletHeroSub">{t.totalBalance}</div>
+        <div className="walletHeroActions">
+          <button type="button" onClick={() => void copyReceiveAddress()} disabled={busy || !isAuthed}>{t.receive}</button>
+          <button type="button" onClick={() => setStatus(t.send)}>{t.send}</button>
+          <button type="button" onClick={() => setStatus(t.swap)}>{t.swap}</button>
+        </div>
+      </section>
 
-        <section className="walletMain">
-          <div className="walletCard panel">
-            <h3>{t.sendIcp}</h3>
-            <div className="walletGrid2">
-              <input
-                type="text"
-                placeholder={t.toPrincipal}
-                value={sendToPrincipal}
-                onChange={(e) => setSendToPrincipal(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={t.amountE8s}
-                value={sendAmountE8s}
-                onChange={(e) => setSendAmountE8s(e.target.value)}
-              />
-            </div>
-            <button type="button" onClick={() => void sendIcp()} disabled={busy || !isAuthed}>{t.sendIcp}</button>
-          </div>
+      <section className="walletTokenArea panel">
+        <div className="walletTokenTabs">
+          <button type="button" className="active">{t.tokenTab}</button>
+          <button type="button" disabled>{t.nftTab}</button>
+          <button type="button" onClick={() => void refreshBalances()} disabled={busy || !isAuthed}>{t.refreshBalances}</button>
+        </div>
 
-          <div className="walletCard panel">
-            <h3>{t.sendEth}</h3>
-            <div className="walletGrid3">
-              <select value={ethNetwork} onChange={(e) => setEthNetwork(e.target.value)}>
-                <option value="ethereum">Ethereum Mainnet</option>
-                <option value="base">Base Mainnet</option>
-              </select>
-              <input
-                type="text"
-                placeholder={t.rpcUrl}
-                value={ethRpcUrl}
-                onChange={(e) => setEthRpcUrl(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={t.ethTo}
-                value={ethTo}
-                onChange={(e) => setEthTo(e.target.value)}
-              />
+        <div className="walletTokenList">
+          {tokenRows.map((token) => (
+            <div className="walletTokenRow" key={`${viewNetwork}-${token.symbol}`}>
+              <div className="walletTokenLeft">
+                <div className="walletTokenIcon">{token.symbol.slice(0, 2)}</div>
+                <div className="walletTokenMeta">
+                  <strong>{token.symbol}</strong>
+                  <span>{token.name}</span>
+                </div>
+              </div>
+              <strong className="walletTokenBalance">{token.balance}</strong>
             </div>
-            <div className="walletActionRow">
-              <input
-                type="text"
-                placeholder={t.ethAmount}
-                value={ethAmount}
-                onChange={(e) => setEthAmount(e.target.value)}
-              />
-              <button type="button" onClick={() => void sendEth()} disabled={busy || !isAuthed}>{t.sendEth}</button>
-            </div>
-          </div>
-
-          <div className="walletCard panel">
-            <h3>{t.sendIcrc1}</h3>
-            <div className="walletGrid3">
-              <input
-                type="text"
-                placeholder={t.icrc1Ledger}
-                value={icrc1LedgerPrincipal}
-                onChange={(e) => setIcrc1LedgerPrincipal(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={t.icrc1Amount}
-                value={icrc1Amount}
-                onChange={(e) => setIcrc1Amount(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={t.icrc1Fee}
-                value={icrc1Fee}
-                onChange={(e) => setIcrc1Fee(e.target.value)}
-              />
-            </div>
-            <button type="button" onClick={() => void sendIcrc1()} disabled={busy || !isAuthed}>{t.sendIcrc1}</button>
-          </div>
-
-          <div className="walletCard panel">
-            <h3>{t.sendErc20}</h3>
-            <div className="walletGrid3">
-              <input
-                type="text"
-                placeholder={t.erc20Token}
-                value={erc20TokenAddress}
-                onChange={(e) => setErc20TokenAddress(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={t.erc20To}
-                value={erc20To}
-                onChange={(e) => setErc20To(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder={t.erc20Amount}
-                value={erc20Amount}
-                onChange={(e) => setErc20Amount(e.target.value)}
-              />
-            </div>
-            <button type="button" onClick={() => void sendErc20()} disabled={busy || !isAuthed}>{t.sendErc20}</button>
-          </div>
-        </section>
-      </div>
+          ))}
+        </div>
+      </section>
 
       <footer className="walletFooter panel">
         <span>{t.status}</span>
