@@ -1,234 +1,301 @@
-# OpenClaw on ICP（最小可用子集）
+# OpenClaw on ICP（当前实现）
 
+这个仓库是 OpenClaw 在 Internet Computer（ICP）canister 环境下的最小可运行实现。
 
-后端Canister 是一个活的Agent
+- 后端：Motoko canister（会话、技能、Hooks、结构化工具调用、钱包能力、Webhook 通道）
+- 前端：Vite + React（聊天页、管理页、钱包页）
 
-拥有自己的钱包，私钥在子网手里。控制权在Agent手里。
+说明：README 已按当前代码实现更新（以 `backend/app.mo` 与 `src/declarations/backend/backend.did` 为准）。
 
+## 功能说明
 
+- 会话：`sessions_*`，按 Principal 维度隔离，支持历史、重置、发送
+- 技能：`skills_*`，可在发送时注入 system prompt
+- Hooks：命令触发/关键词触发，可回复文本或调用工具
+- LLM：OpenAI / Anthropic / Google(Gemini) HTTPS outcall
+- 结构化工具调用（function/tool calling）+ 工具后第二轮总结
+- 钱包：
+  - ICP / ICRC1 转账与余额
+  - ETH / ERC20 转账与余额（后端签名+广播）
+  - ckETH 按报价源比价（ICPSwap/KongSwap）并可执行买入
+- 多渠道：
+  - Telegram webhook（`/tg/webhook`）
+  - Discord webhook（`/discord/webhook`）
+- 前端页面：
+  - 聊天页 `index.html`
+  - 管理页 `admin.html`
+  - 钱包页 `wallet.html`
+- 身份与权限：
+  - Internet Identity 登录
+  - owner 模型（首次 owner 绑定后，仅 owner 可调用绝大多数公开接口）
 
-这是一个将 OpenClaw 的部分“核心体验”迁移到 Internet Computer（ICP）上的示例项目：
+对应主流程是：`sessions_send` -> 模型推理 -> （可选）工具执行 -> 二轮总结回复；渠道消息（Telegram/Discord）会复用同一套会话与工具编排能力。
 
-- 后端：Motoko canister（会话/历史、技能仓库、有限工具、LLM HTTPS outcalls）
-- 前端：Vite + React 的 WebChat，并在右上角支持中英文切换
+## 目录结构（新）
 
-说明：原版 OpenClaw 是“本地网关 + 多渠道 + 本机能力 + UI”的完整系统；ICP canister 环境无法原样复刻本地网关/设备权限/多渠道接入，因此本项目实现的是可在 canister 上落地的最小子集。
+```text
+backend/
+  app.mo                         # 后端主入口（公开 Candid API）
+  migration.mo                   # 升级迁移
+  openclaw/
+    core/                        # 会话、技能、状态、hooks、key 管理
+      Types.mo
+      Store.mo
+      Sessions.mo
+      Skills.mo
+      Hooks.mo
+      KeyVault.mo
+    llm/                         # LLM 请求构造、工具路由、工具注册与实现
+      Llm.mo
+      LlmToolRouter.mo
+      ToolRegistry.mo
+      ToolTypes.mo
+      ToolKvGet.mo
+      ToolKvPut.mo
+      ToolTimeNowNs.mo
+      ToolWalletIcp.mo
+      ToolWalletEth.mo
+      ToolWalletBuyCkEth.mo
+      ToolTelegram.mo
+    wallet/                      # ICP/EVM 钱包与交易
+      Wallet.mo
+      WalletIcp.mo
+      WalletEvm.mo
+      EthTx.mo
+      TokenTransfer.mo
+      CkEthTrade.mo
+    channels/                    # 多渠道路由与适配器
+      ChannelRouter.mo
+      TelegramChannelAdapter.mo
+      DiscordChannelAdapter.mo
+    telegram/
+      Telegram.mo
+      TelegramWebhook.mo
+    http/
+      HttpTypes.mo
+      Json.mo
 
-## 功能
+frontend/
+  index.html
+  admin.html
+  wallet.html
+  src/
+    App.jsx
+    admin/AdminApp.jsx
+    wallet/WalletApp.jsx
+```
 
-- `sessions_*`：按 Principal 隔离会话，支持创建/列表/历史/重置/发送
-- `skills_*`：简化版技能仓库（写入/读取/列表/删除），发送时可选择注入到 system prompt
-- `tools_*`：链上安全的极简工具（KV 读写、取当前时间）
-- LLM：支持 OpenAI / Anthropic 的 HTTPS outcalls（`sessions_send` 内部调用）
-- LLM：支持 OpenAI / Anthropic / Google (Gemini, AI Studio) 的 HTTPS outcalls（`sessions_send` 内部调用）
-- WebChat：网页聊天 UI，可选择 provider/model、填写 API Key、查看历史、重置会话
-- 钱包：主界面“钱包”按钮可查看后端 canister 的 ICP/ETH 接受地址，并支持发送 ICP
-- 钱包：支持发送 ETH（Ethereum Mainnet / Base Mainnet）
-	- ETH 发送流程已改为后端执行：后端查 nonce/gas -> 后端签名 -> 后端广播
-- 钱包：支持发送 ICRC1 Token（传入 Ledger Principal + 目标 Principal + amount + 可选 fee）
-- 钱包：支持发送 ERC20（后端构造 `transfer(address,uint256)` 并签名广播）
-- 钱包：支持余额查询（ICP / ICRC1 / ETH / ERC20）
-- 钱包：支持按数量买 ckETH（例如 `0.5`），后端直接通过 HTTP 对比 ICPSwap/KongSwap 报价并优先选择更便宜的 venue
-- 钱包：`wallet_eth_address()` 由后端返回 Agent ETH 地址（前端不再本地推导）
-- 钱包：后端自动判断 ICP Ledger 网络（本地可用则走本地 ledger，否则回退主网 ledger）
-- LLM 工具调用：已切换为结构化 function/tool calling（OpenAI / Anthropic / Google），不再依赖正文中的 `[TOOL]...` 文本约定
-- LLM 工具调用：工具执行后会自动进行二轮模型总结（tool result -> final assistant reply）
-- 架构：业务逻辑后端化（签名、转账、余额与地址计算都在 canister），前端仅负责 UI 与调用
-- 语言切换：右上角按钮切换中文/英文（仅切换界面文案）
-
-## 目录结构
-
-- 后端主入口：backend/app.mo
-- 后端模块：backend/openclaw/
-	- Types.mo：对外 Candid 类型
-	- Store.mo：状态与升级序列化
-	- Sessions.mo / Skills.mo / Tools.mo：核心业务
-	- Llm.mo：OpenAI/Anthropic 请求构造与 outcall
-	- Json.mo：JSON escape + 定向解析（抽取 content/text）
-	- TokenTransfer.mo：ICRC1/ICP 转账
-	- WalletIcp.mo：ICP/ICRC1 钱包能力（发币、余额、本地/主网 ledger 自动判断）
-	- WalletEvm.mo：EVM 钱包能力（ETH/ERC20 地址、发送、余额）
-	- EthTx.mo：ETH 构造、签名与广播
-- 前端：frontend/
-	- index.html：React 挂载点
-	- src/App.jsx：聊天 UI + 中英文切换
-
-## 使用方式
+## 运行方式（本地）
 
 ### 依赖
 
-- dfx（建议与本项目一致的版本或更高）
-- Node.js（用于 Vite/React 前端构建）
+- `dfx`
+- Node.js + npm
+- `mops`（`dfx` 构建 Motoko 时会用到）
 
-### 本地运行（开发）
+### 步骤
 
 1. 启动本地 replica
 
-	 dfx start --background
+```bash
+dfx start --background
+```
 
-2. 安装依赖并构建前端
+2. 创建 canister id（`npm run build` 前需要）
 
-	 npm install
-	 npm run build
+```bash
+dfx canister create --all
+```
 
-3. 创建并部署 canisters
+3. 安装依赖并构建前端
 
-	 dfx canister create --all
-	 dfx deploy
+```bash
+npm install
+npm run build
+```
 
-4. 打开前端
+4. 部署
 
-	 `dfx deploy` 输出里会给出前端 canister URL。
+```bash
+dfx deploy
+```
 
-注意：本地 replica 对 HTTPS outcalls 可能不可用/受限；如果你需要调用 OpenAI/Anthropic，建议部署到主网并确保 canister 有足够 cycles。
+部署后从 `dfx` 输出中打开前端 URL。
 
-### 主网部署（提示）
+### 关键注意
 
-- HTTPS outcalls 会消耗 cycles
-- 本项目当前把 API Key 作为 `sessions_send` 参数从前端传入（最简单，但 key 会出现在 canister 调用参数中）；生产环境建议改为更安全的密钥管理方案
-- Google (Gemini) 的 key 可从 AI Studio 获取；本项目通过 Generative Language API `v1beta/models/{model}:generateContent` 调用
-	- 模型名需要是具体 id（例如 `gemini-1.5-flash`、`gemini-1.5-pro`）；本项目也会把简写 `gemini` 自动归一化为 `gemini-1.5-flash`
+- `frontend` 的预构建会执行 `dfx generate backend`，所以建议先 `dfx canister create --all`
+- 本地 HTTPS outcalls 可能受限；真实 LLM 调用建议主网并保证 cycles 充足
+- `owner` 逻辑：首次通过受保护接口的调用者会被绑定为 owner（后续仅 owner 可管理）
 
-## 后端 API（概览）
+## 前端页面
 
-- sessions
-	- `sessions_create(sessionId)`
-	- `sessions_list()`
-	- `sessions_history(sessionId, limit)`
-	- `sessions_reset(sessionId)`
-	- `sessions_send(sessionId, message, opts)`
-- skills
-	- `skills_put(name, markdown)`
-	- `skills_get(name)`
-	- `skills_list()`
-	- `skills_delete(name)`
-- tools
-	- `tools_list()`
-	- `tools_invoke(name, args)`
-- wallet
-	- `admin_set_cketh_broker(canisterText)`（兼容旧接口，等价于仅设置 icpswap broker）
-	- `admin_set_cketh_brokers(icpswapCanisterText, kongswapCanisterText)`
-	- `admin_set_cketh_quote_sources(icpswapQuoteUrl, kongswapQuoteUrl)`
-	- `cketh_status()`
-	- `canister_principal()`
-	- `agent_wallet()`
-	- `wallet_eth_address()`
-	- `wallet_send_icp(toPrincipalText, amountE8s)`
-	- `wallet_send_icrc1(ledgerPrincipalText, toPrincipalText, amount, fee)`
-	- `wallet_send_eth_raw(network, rpcUrl, rawTxHex)`
-	- `wallet_send_eth(network, rpcUrl, toAddress, amountWei)`
-	- `wallet_buy_cketh(amountCkEthText, maxIcpE8s)`
-	- `wallet_buy_cketh_one(maxIcpE8s)`（兼容接口，等价于买 `1`）
-	- `wallet_send_erc20(network, rpcUrl, tokenAddress, toAddress, amount)`
-	- `wallet_balance_icp()`
-	- `wallet_balance_icrc1(ledgerPrincipalText)`
-	- `wallet_balance_eth(network, rpcUrl)`
-	- `wallet_balance_erc20(network, rpcUrl, tokenAddress)`
-	- `ecdsa_public_key(derivationPath, keyName)`
-	- `sign_with_ecdsa(messageHash, derivationPath, keyName)`
+- 聊天页（`index.html`）
+  - provider/model 选择、会话历史、skills 勾选、发送消息
+  - Google provider 支持通过 `models_list` 动态拉取模型列表
+- 管理页（`admin.html`）
+  - Telegram / Discord 配置
+  - 默认 LLM 配置（供渠道 webhook 使用）
+  - Provider API Key 保存与检测
+  - ckETH 报价源配置
+  - Skills 管理
+  - Hooks 管理
+- 钱包页（`wallet.html`）
+  - 地址展示
+  - ICP / ETH / ICRC1 / ERC20 余额刷新与转账操作
 
-说明：`wallet_send_eth` 使用后端 canister 直接调用系统 `ecdsa_public_key/sign_with_ecdsa` 完成签名与广播，不依赖 Chain Fusion Signer；前端关闭后，后端接口仍可由其他调用方触发。当前钱包相关能力（地址计算/余额查询/转账）均由后端执行。
+## 会话与工具流程
 
-`wallet_buy_cketh` 会先直接拉取你配置的 ICPSwap/KongSwap 报价 URL，对比后选最便宜的 venue。
+`sessions_send` 当前流程：
 
-- 报价 URL 推荐使用模板（后端会替换占位符）：
-	- `{amount}`：ckETH 数量（原始文本，例如 `0.5`）
-	- `{amountWei}`：ckETH 数量换算后的 wei（例如 `500000000000000000`）
-- 可选：如果你仍配置了 broker，则在比价后会尝试执行买入；未配置 broker 时返回 `quote_only=true`。
+1. 处理本地 slash 命令（`/help`、`/status`、`/hooks`、`/new`、`/reset`）
+2. 检查 Hooks（命令触发或关键词触发）
+3. 调用模型（携带 tool schema）
+4. 若模型返回工具调用：执行工具，写入 `tool` 消息
+5. 再次调用模型生成最终回复
 
-- 若使用 broker，ICPSwap broker 与 KongSwap broker 需要实现统一接口：
-	- `quote_cketh(amountWei : nat) -> variant { ok : nat64; err : text }`（返回预估 ICP e8s）
-	- `buy_cketh(amountWei : nat, maxIcpE8s : nat64) -> variant { ok : text; err : text }`
-- 后端会选择 `expectedIcpE8s` 更低的 venue。
-- 示例：买 0.5 个 ckETH，可调用 `wallet_buy_cketh("0.5", maxIcpE8s)`。
+说明：当前实现是单次工具执行 + 一次总结，不做无限多轮 tool loop。
 
-## LLM 调用钱包接口（自然语言触发）
+## LLM 工具（供模型调用）
 
-本项目已打通 `sessions_send` -> LLM -> 后端工具执行链路，可由自然语言触发钱包工具（如 `wallet_send_icp`）。
+当前注册工具：
 
-当前流程（结构化工具调用）：
+- `wallet_send_icp`：`<to_principal>|<amount_e8s>`
+- `wallet_send_eth`：`<network>|<to_address>|<amount_wei>`
+- `wallet_buy_cketh`：`<amount_cketh>|<max_icp_e8s>`
+- `tg_send_message`：`<chat_id>|<text>`
 
-1. 后端将工具 schema 作为 function/tool definitions 发送给模型
-2. 模型返回结构化工具调用（非正文文本标记）
-3. 后端执行工具并写入 tool 消息
-4. 后端自动再次调用模型，基于 tool result 生成最终自然语言回复
+参数约定：
 
-- 当前支持工具：`wallet_send_icp`
-- 触发目标：当用户表达“给某个 Principal 转 ICP”时，模型会输出内部工具指令并由后端执行。
+- tool payload 使用 `args_line`（字符串），后端按 `|` 拆分
 
-### 用法示例
+## 渠道接入
 
-- 你对 LLM 说：`发给 xxxxxxx 1 ICP`
-- 后端流程：
-	1. LLM 生成结构化工具调用
-	2. `Sessions.mo` 解析为 `wallet_send_icp(to_principal, amount_e8s)`
-	3. `app.mo` 中工具执行器调用 `WalletIcp.sendIcp(...)`
-	4. 工具结果回填后，模型二轮生成最终回复（成功时包含链上结果，如区块号）
+### Telegram
 
-### 说明
+- webhook 路径：`/tg/webhook`
+- 管理 API：
+  - `admin_set_tg(botToken, secretToken)`
+  - `admin_set_llm_opts(opts)`
+  - `admin_tg_set_webhook(url)`
+  - `tg_status()`
+- 若配置了 secret，后端会校验 `X-Telegram-Bot-Api-Secret-Token`
 
-- 金额按 e8s 执行：`1 ICP = 100000000 e8s`
-- 若 Principal 无效、余额不足、权限不满足，会返回错误信息
+### Discord
 
-## Telegram 接入（Bot Webhook）
+- webhook 路径：`/discord/webhook`
+- 管理 API：
+  - `admin_set_discord(proxySecret)`
+  - `discord_status()`
+- 当前适配器会校验：
+  - `x-openclaw-discord-secret`（与配置一致）
+  - `x-discord-signature-ed25519`（存在）
+  - `x-discord-signature-timestamp`（存在）
 
-本项目支持把 Telegram 当作“聊天入口”：你在 Telegram 里给 bot 发消息，后端 canister 会在链上调用 LLM 生成回复，并通过 Telegram `sendMessage` 回写。
+## 钱包与 ckETH 说明
 
-### 1) 创建 Bot
+- ETH/ERC20：由后端查 nonce/gas、签名、广播
+- `wallet_buy_cketh`：
+  - 支持 `{amount}`、`{amountWei}` 占位符 URL 模板
+  - 先比较报价源，选更便宜 venue
+  - 若对应 broker 未配置，返回 `quote_only=true`
 
-用 BotFather 创建 bot 并拿到 `BOT_TOKEN`。
+## API Key 处理
 
-### 2) 在 canister 配置 Telegram + LLM
+- `sessions_send` 的 `opts.apiKey` 非空时，优先使用调用时传入值
+- 空值时，尝试使用 `admin_set_provider_api_key` 存储的 provider key
+- 当前 KeyVault 是轻量掩码存储（非 HSM/硬件级密钥方案），生产环境建议使用更强密钥管理
 
-在 `dfx` 或你自己的管理脚本里调用：
+## 后端 API（当前）
 
-- `admin_set_tg(botToken, secretToken)`：设置 bot token（建议同时设置 secret）
-- `admin_set_llm_opts(opts)`：设置 Telegram 通道使用的默认 LLM 配置（provider/model/apiKey 等）
+以 `src/declarations/backend/backend.did` 为准，按功能分组如下。
 
-说明：为了让你能直接在 Telegram 控制它，这里的 token / LLM apiKey 会存到 canister 状态里；生产环境请谨慎处理密钥与访问控制。
+### 身份与 owner
 
-### 3) 设置 Webhook
+- `owner_get()`
+- `whoami()`
 
-你需要一个公网可访问的 canister URL（主网）：
+### sessions
 
-- `https://<canister-id>.icp0.io/tg/webhook`
+- `sessions_create(sessionId)`
+- `sessions_list()`
+- `sessions_list_for(principal)`
+- `sessions_history(sessionId, limit)`
+- `sessions_reset(sessionId)`
+- `sessions_send(sessionId, message, opts)`
 
-然后调用：
+### skills
 
-- `admin_tg_set_webhook("https://<canister-id>.icp0.io/tg/webhook")`
+- `skills_put(name, markdown)`
+- `skills_get(name)`
+- `skills_list()`
+- `skills_delete(name)`
 
-如果你在 `admin_set_tg` 里设置了 `secretToken`，Telegram 会在请求头 `X-Telegram-Bot-Api-Secret-Token` 带上该值，后端会校验。
+### hooks
 
-### 4) 使用
+- `hooks_list()`
+- `hooks_put_command_reply(name, command, reply)`
+- `hooks_put_message_reply(name, keyword, reply)`
+- `hooks_put_command_tool(name, command, toolName, toolArgs)`
+- `hooks_put_message_tool(name, keyword, toolName, toolArgs)`
+- `hooks_set_enabled(name, enabled)`
+- `hooks_delete(name)`
 
-在 Telegram 里给 bot 发消息即可。会话按 chat id 隔离：`sessionId = "tg:<chatId>"`。
+### 基础 tools
 
+- `tools_list()`
+- `tools_invoke(name, args)`
 
+说明：这里的基础 tools 目前是 `kv.get`、`kv.put`、`time.nowNs`。
 
-### 2. 管理页面（Telegram + LLM）
+### LLM / provider key / 渠道管理
 
-- 管理页支持调用以下后端管理接口：
-	- `tg_status`
-	- `admin_set_tg`
-	- `admin_set_llm_opts`
-	- `admin_tg_set_webhook`
-- 支持配置并保存：
-	- Telegram Bot Token
-	- Secret Token（可选）
-	- 默认 LLM provider/model/apiKey/system prompt
-	- Webhook URL
-	- ckETH 报价源 URL（ICPSwap/KongSwap）
+- `models_list(provider, apiKey)`
+- `admin_set_provider_api_key(provider, apiKey)`
+- `admin_has_provider_api_key(provider)`
+- `admin_set_llm_opts(opts)`
+- `admin_set_tg(botToken, secretToken)`
+- `admin_tg_set_webhook(webhookUrl)`
+- `tg_status()`
+- `admin_set_discord(proxySecret)`
+- `discord_status()`
+- `admin_set_cketh_broker(canisterText)`
+- `admin_set_cketh_brokers(icpswapCanisterText, kongswapCanisterText)`
+- `admin_set_cketh_quote_sources(icpswapQuoteUrl, kongswapQuoteUrl)`
+- `cketh_status()`
 
-ckETH 报价源建议填写带占位符的 URL 模板（后端自动替换）：
+### 钱包
 
-- `...amount={amount}`
-- `...amountWei={amountWei}`
+- `canister_principal()`
+- `agent_wallet()`
+- `wallet_eth_address()`
+- `wallet_send_icp(toPrincipalText, amountE8s)`
+- `wallet_send_icrc1(ledgerPrincipalText, toPrincipalText, amount, fee)`
+- `wallet_send_eth_raw(network, rpcUrl, rawTxHex)`
+- `wallet_send_eth(network, rpcUrl, toAddress, amountWei)`
+- `wallet_send_erc20(network, rpcUrl, tokenAddress, toAddress, amount)`
+- `wallet_balance_icp()`
+- `wallet_balance_icrc1(ledgerPrincipalText)`
+- `wallet_balance_eth(network, rpcUrl)`
+- `wallet_balance_erc20(network, rpcUrl, tokenAddress)`
+- `wallet_buy_cketh(amountCkEthText, maxIcpE8s)`
+- `wallet_buy_cketh_one(maxIcpE8s)`
+- `ecdsa_public_key(derivationPath, keyName)`
+- `sign_with_ecdsa(messageHash, derivationPath, keyName)`
 
+### canister HTTP
 
+- `http_request(req)`（query）
+- `http_request_update(req)`（update）
+- `http_transform(args)`（query）
 
+## 主网部署提示
 
-
-### 5. Identity + 后端签名钱包
-
-- 前端接入 Internet Identity 登录（II），登录后显示当前 Principal。
-- ETH 地址通过后端调用系统接口 `ecdsa_public_key` 获取公钥并派生地址（前端只做展示）。
+- HTTPS outcalls 与 EVM RPC 请求会消耗 cycles
+- webhook 使用公网 URL，例如：
+  - `https://<backend-canister-id>.icp0.io/tg/webhook`
+  - `https://<backend-canister-id>.icp0.io/discord/webhook`
+- 生产环境建议：
+  - 限制管理接口调用入口
+  - 强化 API key 管理
+  - 加强 Discord 签名校验链路（目前适配器主要做头字段存在性与代理 secret 校验）
