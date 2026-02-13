@@ -14,6 +14,7 @@
 - Hooks：命令触发/关键词触发，可回复文本或调用工具
 - LLM：OpenAI / Anthropic / Google(Gemini) HTTPS outcall
 - 结构化工具调用（function/tool calling）+ 工具后第二轮总结
+- 工具策略路由：按会话前缀动态筛选可见工具（`tg:` 默认 messaging，`dc:` 默认 minimal）
 - 钱包：
   - ICP / ICRC1 转账与余额
   - ETH / ERC20 转账与余额（后端签名+广播）
@@ -25,11 +26,27 @@
   - 聊天页 `index.html`
   - 管理页 `admin.html`
   - 钱包页 `wallet.html`
+  - 开发窗口 `dev.html`（实时查看发送/接收全文日志）
+- 对话显示：
+  - 聊天页消息按全文显示（不做摘要截断）
+  - 发送后与收到回复后，完整文本会同步到开发窗口（跨窗口实时更新）
 - 身份与权限：
   - Internet Identity 登录
   - owner 模型（首次 owner 绑定后，仅 owner 可调用绝大多数公开接口）
 
 对应主流程是：`sessions_send` -> 模型推理 -> （可选）工具执行 -> 二轮总结回复；渠道消息（Telegram/Discord）会复用同一套会话与工具编排能力。
+
+## 架构对齐（参照 OpenClaw）
+
+当前后端已按 OpenClaw 的主干分层做了同构改造（在 ICP 约束下保留可行子集）：
+
+- `gateway/server-methods`：按功能分拆 API 方法实现（sessions/skills/hooks/tools/models）
+- `auto_reply/Dispatch`：统一入站消息分发（Web/API 都走同一会话发送链路）
+- `channels/plugins/PluginRegistry`：统一渠道插件注册与路由装配
+- `channels/ChannelDock`：渠道轻量元信息（webhook 前缀、session 前缀）
+- `core/ + llm/ + wallet/`：分别承载会话状态、模型与工具、链上钱包能力
+
+详细映射见：`/Users/wangbinmac/gith/openclawonicp/ARCHITECTURE_ALIGNMENT.md`
 
 ## 目录结构（新）
 
@@ -45,9 +62,12 @@ backend/
       Skills.mo
       Hooks.mo
       KeyVault.mo
+    auto_reply/                  # OpenClaw 风格入站分发层
+      Dispatch.mo
     llm/                         # LLM 请求构造、工具路由、工具注册与实现
       Llm.mo
       LlmToolRouter.mo
+      ToolPolicy.mo
       ToolRegistry.mo
       ToolTypes.mo
       ToolKvGet.mo
@@ -64,10 +84,27 @@ backend/
       EthTx.mo
       TokenTransfer.mo
       CkEthTrade.mo
-    channels/                    # 多渠道路由与适配器
+    channels/                    # 多渠道路由、dock 与插件注册
       ChannelRouter.mo
+      ChannelDock.mo
       TelegramChannelAdapter.mo
       DiscordChannelAdapter.mo
+      plugins/
+        PluginRegistry.mo
+    gateway/                     # OpenClaw 风格 server-methods 分层
+      context/
+        AuthContext.mo
+      runtime/
+        GatewayRuntime.mo
+      server-methods/
+        AdminMethods.mo
+        WalletMethods.mo
+        ChannelsMethods.mo
+        SessionsMethods.mo
+        SkillsMethods.mo
+        HooksMethods.mo
+        ToolsMethods.mo
+        ModelsMethods.mo
     telegram/
       Telegram.mo
       TelegramWebhook.mo
@@ -133,6 +170,7 @@ dfx deploy
 - 聊天页（`index.html`）
   - provider/model 选择、会话历史、skills 勾选、发送消息
   - Google provider 支持通过 `models_list` 动态拉取模型列表
+  - 可打开“开发窗口”实时查看发送/接收的完整文本
 - 管理页（`admin.html`）
   - Telegram / Discord 配置
   - 默认 LLM 配置（供渠道 webhook 使用）
@@ -148,13 +186,14 @@ dfx deploy
 
 `sessions_send` 当前流程：
 
-1. 处理本地 slash 命令（`/help`、`/status`、`/hooks`、`/new`、`/reset`）
-2. 检查 Hooks（命令触发或关键词触发）
-3. 调用模型（携带 tool schema）
-4. 若模型返回工具调用：执行工具，写入 `tool` 消息
-5. 再次调用模型生成最终回复
+1. `gateway/server-methods/SessionsMethods` 处理鉴权、参数与 API key 解析
+2. 进入 `auto_reply/Dispatch` 统一分发到 `core/Sessions.send`
+3. `Sessions.send` 处理 slash 命令与 Hooks
+4. 调用模型（携带 tool schema）
+5. 若模型返回工具调用：执行工具，写入 `tool` 消息
+6. 再次调用模型生成最终回复
 
-说明：当前实现是单次工具执行 + 一次总结，不做无限多轮 tool loop。
+说明：当前实现是有上限的 tool loop（默认最多 4 步），避免无限循环。
 
 ## LLM 工具（供模型调用）
 
@@ -164,6 +203,13 @@ dfx deploy
 - `wallet_send_eth`：`<network>|<to_address>|<amount_wei>`
 - `wallet_buy_cketh`：`<amount_cketh>|<max_icp_e8s>`
 - `tg_send_message`：`<chat_id>|<text>`
+
+工具可见性说明：
+
+- 普通会话（非 `tg:` / `dc:` 前缀）默认不做 profile 限制（再叠加 owner/user 权限）
+- `tg:` 会话默认使用 messaging profile（是否可见消息工具仍受 owner/user 权限约束）
+- `dc:` 会话默认使用 minimal profile（基础 KV/时间）
+- webhook 入站默认不启用 owner tools（降低外部消息触发高风险工具的风险）
 
 参数约定：
 
@@ -299,3 +345,7 @@ dfx deploy
   - 限制管理接口调用入口
   - 强化 API key 管理
   - 加强 Discord 签名校验链路（目前适配器主要做头字段存在性与代理 secret 校验）
+
+2 转移控制权
+1. 当前 controller 执行dfx canister update-settings backend --add-controller <new_principal>
+2. 用新身份验证能管理后，再执行dfx canister update-settings backend --remove-controller <old_principal>
