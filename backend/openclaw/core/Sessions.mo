@@ -7,6 +7,7 @@ import Text "mo:base/Text";
 import TrieMap "mo:base/TrieMap";
 
 import Hooks "./Hooks";
+import Json "../http/Json";
 import Llm "../llm/Llm";
 import Skills "./Skills";
 import Store "./Store";
@@ -19,6 +20,7 @@ module {
     apiKey : Text,
     sysPrompt : Text,
     history : [Types.ChatMessage],
+    toolSpecs : [ToolSpec],
     maxTokens : ?Nat,
     temperature : ?Float,
   ) -> async Result.Result<Text, Text>;
@@ -146,49 +148,57 @@ module {
     };
 
     let baseSysPrompt = Skills.buildSystemPrompt(u, opts.systemPrompt, opts.skillNames);
-    let toolPrompt = buildToolPrompt(toolSpecs);
+    let toolPrompt = "";
     let sysPrompt = baseSysPrompt # toolPrompt;
     let hist = if (opts.includeHistory) lastMessages(s, 20) else [{ role = #user; content = message; tsNs = ts }];
 
-    let rawResult = await callModel(opts.provider, opts.model, opts.apiKey, sysPrompt, hist, opts.maxTokens, opts.temperature);
+    let rawResult = await callModel(
+      opts.provider,
+      opts.model,
+      opts.apiKey,
+      sysPrompt,
+      hist,
+      toolSpecs,
+      opts.maxTokens,
+      opts.temperature,
+    );
     switch (rawResult) {
       case (#err(e)) { #err(e) };
       case (#ok(raw)) {
+        switch (parseStructuredToolCall(opts.provider, raw)) {
+          case (?toolCall) {
+            switch (callTool) {
+              case null {
+                let msg : Types.ChatMessage = {
+                  role = #assistant;
+                  content = "模型请求调用工具 " # toolCall.name # "，但当前未启用工具调用。";
+                  tsNs = nowNs();
+                };
+                s.messages.add(msg);
+                s.updatedAtNs := msg.tsNs;
+                return #ok({ assistant = msg; raw = ?raw });
+              };
+              case (?invokeTool) {
+                return await runToolAndFinalize(
+                  s,
+                  nowNs,
+                  invokeTool,
+                  toolCall,
+                  opts,
+                  callModel,
+                  toolSpecs,
+                  sysPrompt,
+                  ?raw,
+                );
+              };
+            }
+          };
+          case null {};
+        };
+
         switch (Llm.extract(opts.provider, raw)) {
           case null { #err("model response parse failed") };
           case (?assistantText) {
-            switch (parseToolCall(assistantText)) {
-              case (?toolCall) {
-                switch (callTool) {
-                  case null {
-                    let msg : Types.ChatMessage = { role = #assistant; content = stripToolPrefixLine(assistantText); tsNs = nowNs() };
-                    s.messages.add(msg);
-                    s.updatedAtNs := msg.tsNs;
-                    return #ok({ assistant = msg; raw = ?raw });
-                  };
-                  case (?invokeTool) {
-                    let toolRes = await invokeTool(toolCall.name, toolCall.args);
-                    let toolMsgText = switch (toolRes) {
-                      case (#ok(v)) toolCall.name # " ok: " # v;
-                      case (#err(e)) toolCall.name # " err: " # e;
-                    };
-                    let toolMsg : Types.ChatMessage = { role = #tool; content = toolMsgText; tsNs = nowNs() };
-                    s.messages.add(toolMsg);
-
-                    let finalText = switch (toolRes) {
-                      case (#ok(v)) "已执行工具 " # toolCall.name # "，结果：" # v;
-                      case (#err(e)) "工具 " # toolCall.name # " 执行失败：" # e;
-                    };
-                    let msg : Types.ChatMessage = { role = #assistant; content = finalText; tsNs = nowNs() };
-                    s.messages.add(msg);
-                    s.updatedAtNs := msg.tsNs;
-                    return #ok({ assistant = msg; raw = ?raw });
-                  };
-                }
-              };
-              case null {};
-            };
-
             let msg : Types.ChatMessage = { role = #assistant; content = assistantText; tsNs = nowNs() };
             s.messages.add(msg);
             s.updatedAtNs := msg.tsNs;
@@ -204,6 +214,73 @@ module {
     s.messages.add(msg);
     s.updatedAtNs := msg.tsNs;
     #ok({ assistant = msg; raw = null })
+  };
+
+  func runToolAndFinalize(
+    s : Store.SessionState,
+    nowNs : () -> Int,
+    invokeTool : ToolCaller,
+    toolCall : ParsedToolCall,
+    opts : Types.SendOptions,
+    callModel : ModelCaller,
+    toolSpecs : [ToolSpec],
+    sysPrompt : Text,
+    firstRaw : ?Text,
+  ) : async Types.SendResult {
+    let toolRes = await invokeTool(toolCall.name, toolCall.args);
+    let toolMsgText = switch (toolRes) {
+      case (#ok(v)) toolCall.name # " ok: " # v;
+      case (#err(e)) toolCall.name # " err: " # e;
+    };
+    let toolMsg : Types.ChatMessage = { role = #tool; content = toolMsgText; tsNs = nowNs() };
+    s.messages.add(toolMsg);
+
+    let hist2 = lastMessages(s, 20);
+    let raw2Result = await callModel(
+      opts.provider,
+      opts.model,
+      opts.apiKey,
+      sysPrompt,
+      hist2,
+      toolSpecs,
+      opts.maxTokens,
+      opts.temperature,
+    );
+
+    switch (raw2Result) {
+      case (#ok(raw2)) {
+        if (parseStructuredToolCall(opts.provider, raw2) != null) {
+          return fallbackToolSummary(s, nowNs, toolCall, toolRes, firstRaw);
+        };
+        switch (Llm.extract(opts.provider, raw2)) {
+          case (?assistantText) {
+            let msg : Types.ChatMessage = { role = #assistant; content = assistantText; tsNs = nowNs() };
+            s.messages.add(msg);
+            s.updatedAtNs := msg.tsNs;
+            #ok({ assistant = msg; raw = ?raw2 })
+          };
+          case null fallbackToolSummary(s, nowNs, toolCall, toolRes, firstRaw);
+        }
+      };
+      case (#err(_)) fallbackToolSummary(s, nowNs, toolCall, toolRes, firstRaw);
+    }
+  };
+
+  func fallbackToolSummary(
+    s : Store.SessionState,
+    nowNs : () -> Int,
+    toolCall : ParsedToolCall,
+    toolRes : Types.ToolResult,
+    raw : ?Text,
+  ) : Types.SendResult {
+    let finalText = switch (toolRes) {
+      case (#ok(v)) "已执行工具 " # toolCall.name # "，结果：" # v;
+      case (#err(e)) "工具 " # toolCall.name # " 执行失败：" # e;
+    };
+    let msg : Types.ChatMessage = { role = #assistant; content = finalText; tsNs = nowNs() };
+    s.messages.add(msg);
+    s.updatedAtNs := msg.tsNs;
+    #ok({ assistant = msg; raw = raw })
   };
 
   func providerName(p : Types.Provider) : Text {
@@ -232,65 +309,91 @@ module {
     args : [Text];
   };
 
-  func buildToolPrompt(specs : [ToolSpec]) : Text {
-    if (specs.size() == 0) return "";
-    let lines = Buffer.Buffer<Text>(specs.size() + 6);
-    lines.add("\n\nTool use policy:");
-    lines.add("- If a tool is needed, first line MUST be: [TOOL]<name>|<arg1>|<arg2>|...");
-    lines.add("- Keep arguments plain text and use integer strings for numeric args.");
-    lines.add("- Available tools:");
-    for (spec in specs.vals()) {
-      lines.add("  - [TOOL]" # spec.name # "|" # spec.argsHint # " ; " # spec.rule);
-    };
-    lines.add("- After the tool line, you may add a short confirmation sentence.");
-    Text.join("\n", lines.vals())
-  };
-
-  func parseToolCall(text : Text) : ?ParsedToolCall {
-    let marker = "[TOOL]";
-    let parts = Text.split(text, #text marker);
-    ignore parts.next();
-    switch (parts.next()) {
-      case null null;
-      case (?afterMarker) {
-        let line = firstLine(afterMarker);
-        let segs = Text.split(line, #text "|");
-        switch (segs.next()) {
-          case null null;
-          case (?nameRaw) {
-            let name = Text.trim(nameRaw, #char ' ');
-            if (Text.size(name) == 0) return null;
-            let argsBuf = Buffer.Buffer<Text>(4);
-            for (arg in segs) {
-              let a = Text.trim(arg, #char ' ');
-              if (Text.size(a) > 0) argsBuf.add(a);
-            };
-            ?{ name; args = Buffer.toArray(argsBuf) }
-          };
-        }
-      };
+  func parseStructuredToolCall(provider : Types.Provider, raw : Text) : ?ParsedToolCall {
+    switch (provider) {
+      case (#openai) parseOpenAIToolCall(raw);
+      case (#anthropic) parseAnthropicToolCall(raw);
+      case (#google) parseGoogleToolCall(raw);
     }
   };
 
-  func firstLine(text : Text) : Text {
-    let lines = Text.split(text, #char '\n');
-    switch (lines.next()) {
+  func parseOpenAIToolCall(raw : Text) : ?ParsedToolCall {
+    let segments = Text.split(raw, #text "\"tool_calls\"");
+    ignore segments.next();
+    let after = switch (segments.next()) {
+      case null return null;
+      case (?v) v;
+    };
+
+    let name = switch (Json.extractStringAfterAny(after, ["\"name\":\"", "\"name\": \""])) {
+      case null return null;
+      case (?n) Text.trim(n, #char ' ');
+    };
+    if (Text.size(name) == 0) return null;
+
+    let argsJson = switch (Json.extractStringAfterAny(after, ["\"arguments\":\"", "\"arguments\": \""])) {
+      case null return ?{ name; args = [] };
+      case (?v) v;
+    };
+
+    let argsLine = switch (Json.extractStringAfterAny(argsJson, ["\"args_line\":\"", "\"args_line\": \""])) {
       case null "";
-      case (?l) l;
-    }
+      case (?v) v;
+    };
+
+    ?{ name; args = splitArgsLine(argsLine) }
   };
 
-  func stripToolPrefixLine(text : Text) : Text {
-    let marker = "[TOOL]";
-    if (not Text.contains(text, #text marker)) return text;
-    let lines = Buffer.Buffer<Text>(4);
-    for (line in Text.split(text, #char '\n')) {
-      if (Text.startsWith(Text.trim(line, #char ' '), #text marker)) {
-      } else {
-        lines.add(line);
-      }
+  func parseAnthropicToolCall(raw : Text) : ?ParsedToolCall {
+    let segments = Text.split(raw, #text "\"type\":\"tool_use\"");
+    ignore segments.next();
+    let after = switch (segments.next()) {
+      case null return null;
+      case (?v) v;
     };
-    let out = Text.join("\n", lines.vals());
-    Text.trim(out, #char ' ')
+
+    let name = switch (Json.extractStringAfterAny(after, ["\"name\":\"", "\"name\": \""])) {
+      case null return null;
+      case (?n) Text.trim(n, #char ' ');
+    };
+    if (Text.size(name) == 0) return null;
+
+    let argsLine = switch (Json.extractStringAfterAny(after, ["\"args_line\":\"", "\"args_line\": \""])) {
+      case null "";
+      case (?v) v;
+    };
+
+    ?{ name; args = splitArgsLine(argsLine) }
+  };
+
+  func parseGoogleToolCall(raw : Text) : ?ParsedToolCall {
+    let segments = Text.split(raw, #text "\"functionCall\"");
+    ignore segments.next();
+    let after = switch (segments.next()) {
+      case null return null;
+      case (?v) v;
+    };
+
+    let name = switch (Json.extractStringAfterAny(after, ["\"name\":\"", "\"name\": \""])) {
+      case null return null;
+      case (?n) Text.trim(n, #char ' ');
+    };
+    if (Text.size(name) == 0) return null;
+
+    let argsLine = switch (Json.extractStringAfterAny(after, ["\"args_line\":\"", "\"args_line\": \""])) {
+      case null "";
+      case (?v) v;
+    };
+
+    ?{ name; args = splitArgsLine(argsLine) }
+  };
+
+  func splitArgsLine(line : Text) : [Text] {
+    let buf = Buffer.Buffer<Text>(4);
+    for (part in Text.split(line, #text "|")) {
+      let trimmed = Text.trim(part, #char ' ');
+      if (Text.size(trimmed) > 0) buf.add(trimmed);
+    };
+    Buffer.toArray(buf)
   };
 }

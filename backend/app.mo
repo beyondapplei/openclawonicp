@@ -542,10 +542,23 @@ persistent actor OpenClawOnICP {
     apiKey : Text,
     sysPrompt : Text,
     history : [ChatMessage],
+    toolSpecs : [Sessions.ToolSpec],
     maxTokens : ?Nat,
     temperature : ?Float,
   ) : async Result.Result<Text, Text> {
-    await Llm.callModel(ic, http_transform, defaultHttpCycles, provider, model, apiKey, sysPrompt, history, maxTokens, temperature)
+    await Llm.callModel(
+      ic,
+      http_transform,
+      defaultHttpCycles,
+      provider,
+      model,
+      apiKey,
+      sysPrompt,
+      history,
+      toolSpecs,
+      maxTokens,
+      temperature,
+    )
   };
 
   let llmToolSpecs : [Sessions.ToolSpec] = LlmToolRouter.defaultSpecs;

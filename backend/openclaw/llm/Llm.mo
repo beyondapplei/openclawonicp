@@ -8,6 +8,7 @@ import Text "mo:base/Text";
 
 import HttpTypes "../http/HttpTypes";
 import Json "../http/Json";
+import ToolTypes "./ToolTypes";
 import Types "../core/Types";
 
 module {
@@ -30,13 +31,14 @@ module {
     apiKey : Text,
     sysPrompt : Text,
     history : [Types.ChatMessage],
+    toolSpecs : [ToolTypes.ToolSpec],
     maxTokens : ?Nat,
     temperature : ?Float,
   ) : async Result.Result<Text, Text> {
     let (url, headers, bodyText) = switch (provider) {
-      case (#openai) buildOpenAIRequest(model, apiKey, sysPrompt, history, maxTokens, temperature);
-      case (#anthropic) buildAnthropicRequest(model, apiKey, sysPrompt, history, maxTokens, temperature);
-      case (#google) buildGoogleRequest(model, apiKey, sysPrompt, history, maxTokens, temperature);
+      case (#openai) buildOpenAIRequest(model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature);
+      case (#anthropic) buildAnthropicRequest(model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature);
+      case (#google) buildGoogleRequest(model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature);
     };
 
     let req : HttpTypes.HttpRequestArgs = {
@@ -154,6 +156,7 @@ module {
     apiKey : Text,
     sysPrompt : Text,
     history : [Types.ChatMessage],
+    toolSpecs : [ToolTypes.ToolSpec],
     maxTokens : ?Nat,
     temperature : ?Float,
   ) : (Text, [HttpTypes.HttpHeader], Text) {
@@ -166,10 +169,36 @@ module {
     let body = "{" #
       "\"model\":\"" # Json.escape(model) # "\"," #
       "\"messages\":" # messagesJson #
+      openAIToolsField(toolSpecs) #
       optNatField("max_tokens", maxTokens) #
       optFloatField("temperature", temperature) #
       "}";
     (url, headers, body)
+  };
+
+  func openAIToolsField(specs : [ToolTypes.ToolSpec]) : Text {
+    if (specs.size() == 0) return "";
+
+    let defs = Buffer.Buffer<Text>(specs.size());
+    for (spec in specs.vals()) {
+      let description =
+        "Use this tool when needed. args_line format: " # spec.argsHint # ". Rule: " # spec.rule;
+      let argsDesc = "Pipe-separated arguments in order: " # spec.argsHint;
+      defs.add(
+        "{\"type\":\"function\",\"function\":{" #
+        "\"name\":\"" # Json.escape(spec.name) # "\"," #
+        "\"description\":\"" # Json.escape(description) # "\"," #
+        "\"parameters\":{" #
+        "\"type\":\"object\"," #
+        "\"properties\":{\"args_line\":{\"type\":\"string\",\"description\":\"" # Json.escape(argsDesc) # "\"}}," #
+        "\"required\":[\"args_line\"]," #
+        "\"additionalProperties\":false" #
+        "}" #
+        "}}"
+      );
+    };
+
+    ",\"tools\":[" # Text.join(",", defs.vals()) # "],\"tool_choice\":\"auto\""
   };
 
   func buildAnthropicRequest(
@@ -177,6 +206,7 @@ module {
     apiKey : Text,
     sysPrompt : Text,
     history : [Types.ChatMessage],
+    toolSpecs : [ToolTypes.ToolSpec],
     maxTokens : ?Nat,
     temperature : ?Float,
   ) : (Text, [HttpTypes.HttpHeader], Text) {
@@ -194,9 +224,34 @@ module {
       "\"max_tokens\":" # Nat.toText(max) # "," #
       (if (Text.size(sysPrompt) > 0) "\"system\":\"" # Json.escape(sysPrompt) # "\"," else "") #
       "\"messages\":" # msgJson #
+      anthropicToolsField(toolSpecs) #
       optFloatField("temperature", temperature) #
       "}";
     (url, headers, body)
+  };
+
+  func anthropicToolsField(specs : [ToolTypes.ToolSpec]) : Text {
+    if (specs.size() == 0) return "";
+
+    let defs = Buffer.Buffer<Text>(specs.size());
+    for (spec in specs.vals()) {
+      let description =
+        "Use this tool when needed. args_line format: " # spec.argsHint # ". Rule: " # spec.rule;
+      let argsDesc = "Pipe-separated arguments in order: " # spec.argsHint;
+      defs.add(
+        "{\"name\":\"" # Json.escape(spec.name) # "\"," #
+        "\"description\":\"" # Json.escape(description) # "\"," #
+        "\"input_schema\":{" #
+        "\"type\":\"object\"," #
+        "\"properties\":{\"args_line\":{\"type\":\"string\",\"description\":\"" # Json.escape(argsDesc) # "\"}}," #
+        "\"required\":[\"args_line\"]," #
+        "\"additionalProperties\":false" #
+        "}" #
+        "}"
+      );
+    };
+
+    ",\"tools\":[" # Text.join(",", defs.vals()) # "],\"tool_choice\":{\"type\":\"auto\"}"
   };
 
   func buildGoogleRequest(
@@ -204,6 +259,7 @@ module {
     apiKey : Text,
     sysPrompt : Text,
     history : [Types.ChatMessage],
+    toolSpecs : [ToolTypes.ToolSpec],
     maxTokens : ?Nat,
     temperature : ?Float,
   ) : (Text, [HttpTypes.HttpHeader], Text) {
@@ -223,9 +279,34 @@ module {
         "\"systemInstruction\":{\"parts\":[{\"text\":\"" # Json.escape(sysPrompt) # "\"}]},"
         else "") #
       "\"contents\":" # contentsJson #
+      googleToolsField(toolSpecs) #
       genCfg #
       "}";
     (url, headers, body)
+  };
+
+  func googleToolsField(specs : [ToolTypes.ToolSpec]) : Text {
+    if (specs.size() == 0) return "";
+
+    let defs = Buffer.Buffer<Text>(specs.size());
+    for (spec in specs.vals()) {
+      let description =
+        "Use this tool when needed. args_line format: " # spec.argsHint # ". Rule: " # spec.rule;
+      let argsDesc = "Pipe-separated arguments in order: " # spec.argsHint;
+      defs.add(
+        "{\"name\":\"" # Json.escape(spec.name) # "\"," #
+        "\"description\":\"" # Json.escape(description) # "\"," #
+        "\"parameters\":{" #
+        "\"type\":\"object\"," #
+        "\"properties\":{\"args_line\":{\"type\":\"string\",\"description\":\"" # Json.escape(argsDesc) # "\"}}," #
+        "\"required\":[\"args_line\"]," #
+        "\"additionalProperties\":false" #
+        "}" #
+        "}"
+      );
+    };
+
+    ",\"tools\":[{\"functionDeclarations\":[" # Text.join(",", defs.vals()) # "]}],\"toolConfig\":{\"functionCallingConfig\":{\"mode\":\"AUTO\"}}"
   };
 
   func normalizeGoogleModel(model : Text) : Text {

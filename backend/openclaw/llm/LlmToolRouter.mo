@@ -1,10 +1,7 @@
 import Text "mo:base/Text";
 
 import ToolTypes "./ToolTypes";
-import ToolWalletIcp "./ToolWalletIcp";
-import ToolWalletEth "./ToolWalletEth";
-import ToolTelegram "./ToolTelegram";
-import ToolWalletBuyCkEth "./ToolWalletBuyCkEth";
+import ToolRegistry "./ToolRegistry";
 
 module {
   public type ToolResult = ToolTypes.ToolResult;
@@ -14,14 +11,7 @@ module {
   public type BuyCkEthFn = ToolTypes.BuyCkEthFn;
   public type ToolSpec = ToolTypes.ToolSpec;
   type DispatchDeps = ToolTypes.DispatchDeps;
-  type ToolHandler = ToolTypes.ToolHandler;
-
-  public let defaultSpecs : [ToolSpec] = [
-    ToolWalletIcp.spec,
-    ToolWalletEth.spec,
-    ToolTelegram.spec,
-    ToolWalletBuyCkEth.spec,
-  ];
+  public let defaultSpecs : [ToolSpec] = ToolRegistry.specs;
 
   public func dispatch(
     name : Text,
@@ -37,23 +27,9 @@ module {
       sendTg = sendTg;
       buyCkEth = buyCkEth;
     };
-    switch (findHandler(name)) {
+    switch (ToolRegistry.findHandler(name)) {
       case null #err("unknown tool");
       case (?h) await h.run(args, deps);
     }
-  };
-
-  let handlers : [ToolHandler] = [
-    ToolWalletIcp.handler,
-    ToolWalletEth.handler,
-    ToolTelegram.handler,
-    ToolWalletBuyCkEth.handler,
-  ];
-
-  func findHandler(name : Text) : ?ToolHandler {
-    for (h in handlers.vals()) {
-      if (h.name == name) return ?h;
-    };
-    null
   };
 }

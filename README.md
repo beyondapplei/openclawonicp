@@ -31,6 +31,8 @@
 - 钱包：支持按数量买 ckETH（例如 `0.5`），后端直接通过 HTTP 对比 ICPSwap/KongSwap 报价并优先选择更便宜的 venue
 - 钱包：`wallet_eth_address()` 由后端返回 Agent ETH 地址（前端不再本地推导）
 - 钱包：后端自动判断 ICP Ledger 网络（本地可用则走本地 ledger，否则回退主网 ledger）
+- LLM 工具调用：已切换为结构化 function/tool calling（OpenAI / Anthropic / Google），不再依赖正文中的 `[TOOL]...` 文本约定
+- LLM 工具调用：工具执行后会自动进行二轮模型总结（tool result -> final assistant reply）
 - 架构：业务逻辑后端化（签名、转账、余额与地址计算都在 canister），前端仅负责 UI 与调用
 - 语言切换：右上角按钮切换中文/英文（仅切换界面文案）
 
@@ -142,7 +144,14 @@
 
 ## LLM 调用钱包接口（自然语言触发）
 
-本项目已打通 `sessions_send` -> LLM -> 后端工具执行链路，可由自然语言触发 `wallet_send_icp`。
+本项目已打通 `sessions_send` -> LLM -> 后端工具执行链路，可由自然语言触发钱包工具（如 `wallet_send_icp`）。
+
+当前流程（结构化工具调用）：
+
+1. 后端将工具 schema 作为 function/tool definitions 发送给模型
+2. 模型返回结构化工具调用（非正文文本标记）
+3. 后端执行工具并写入 tool 消息
+4. 后端自动再次调用模型，基于 tool result 生成最终自然语言回复
 
 - 当前支持工具：`wallet_send_icp`
 - 触发目标：当用户表达“给某个 Principal 转 ICP”时，模型会输出内部工具指令并由后端执行。
@@ -151,10 +160,10 @@
 
 - 你对 LLM 说：`发给 xxxxxxx 1 ICP`
 - 后端流程：
-	1. LLM 生成工具调用行（内部格式）
+	1. LLM 生成结构化工具调用
 	2. `Sessions.mo` 解析为 `wallet_send_icp(to_principal, amount_e8s)`
 	3. `app.mo` 中工具执行器调用 `WalletIcp.sendIcp(...)`
-	4. 返回链上结果（成功时含区块号）
+	4. 工具结果回填后，模型二轮生成最终回复（成功时包含链上结果，如区块号）
 
 ### 说明
 
