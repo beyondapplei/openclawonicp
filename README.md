@@ -7,6 +7,10 @@
 
 说明：README 已按当前代码实现更新（以 `backend/app.mo` 与 `src/declarations/backend/backend.did` 为准）。
 
+## 当前架构文档
+
+- 最新架构与功能说明（中文）：`/Users/wangbinmac/gith/agentonicp/ARCHITECTURE_CURRENT_ZH.md`
+
 ## 近期功能更新
 
 - 项目对外名称统一为 `AgentOnICP`
@@ -14,6 +18,10 @@
 - 钱包新增自动买 UNI：`wallet_buy_uni`（余额检查、报价、自动授权）
 - 新增 Polymarket 研究能力：`polymarket_research`
 - 开发窗口支持查看发送/接收的大模型完整文本
+- 钱包 ECDSA 衍生路径统一为：`[canister_id, "agentonicp"]`（请求可显式覆盖，空值时回退默认）
+- 修复 `sign_with_ecdsa` / `ecdsa_public_key` 的 0 cycles 问题（管理调用已附带 cycles）
+- 钱包交易记录支持 EVM：ETH 在各 EVM 链可查看本应用发起的交易历史
+- 钱包新增 EVM 手动添加代币合约地址（ERC20），添加后自动展示余额并可直接发起转账
 
 ## 功能说明
 
@@ -28,7 +36,6 @@
   - ETH / ERC20 转账与余额（后端签名+广播）
   - Uniswap V3 ERC20 兑换（`exactInputSingle`）
   - 自动买 UNI（检查 ETH/USDC/USDT、自动选输入币、自动授权）
-  - ckETH 按报价源比价（ICPSwap/KongSwap）并可执行买入
 - 研究：
   - Polymarket 市场候选 + 新闻头条聚合（下注分析输入）
 - 多渠道：
@@ -92,7 +99,6 @@ backend/
       ToolWalletSwapUniswap.mo
       ToolWalletBuyUni.mo
       ToolPolymarketResearch.mo
-      ToolWalletBuyCkEth.mo
       ToolTelegram.mo
     wallet/                      # ICP/EVM 钱包与交易
       Wallet.mo
@@ -102,7 +108,6 @@ backend/
       TokenTransfer.mo
       RpcConfig.mo
       TokenConfig.mo
-      CkEthTrade.mo
     polymarket/
       PolymarketResearch.mo
     channels/                    # 多渠道路由、dock 与插件注册
@@ -196,12 +201,34 @@ dfx deploy
   - Telegram / Discord 配置
   - 默认 LLM 配置（供渠道 webhook 使用）
   - Provider API Key 保存与检测
-  - ckETH 报价源配置
   - Skills 管理
   - Hooks 管理
 - 钱包页（`wallet.html`）
   - 地址展示
   - ICP / ETH / ICRC1 / ERC20 余额刷新与转账操作
+  - 交易记录：ICP 账本记录 + EVM(ETH) 本应用发起记录
+  - EVM 代币管理：手动添加 ERC20 合约地址（按网络保存）
+
+## 钱包本次改动说明（2026-02-15）
+
+- ECDSA 与签名
+  - 默认衍生路径改为 `Principal.toBlob(canisterId)` + `"agentonicp"`
+  - `ecdsa_public_key` 与 `sign_with_ecdsa` 请求路径保持一致：
+    - 调用方传入 `derivationPath` 非空：使用调用方路径
+    - 传入为空：回退默认路径
+  - 管理调用已显式附带 cycles，避免 `request sent with 0 cycles` 报错
+
+- 钱包交易记录
+  - `wallet_asset_history` 在 EVM 网络下支持 ETH 历史展示
+  - 当前 EVM 历史来源为“本应用发起并成功返回 txHash 的交易记录”（稳定可用，跨 EVM 链一致）
+
+- EVM 手动代币
+  - 新增后端接口：
+    - `wallet_evm_token_add(network, tokenAddress, symbol?, name?, decimals?)`
+    - `wallet_evm_tokens()`
+    - `wallet_evm_token_remove(network, tokenAddress)`
+  - 前端钱包页支持输入并添加 ERC20 合约地址
+  - 添加后会在资产列表中显示对应代币余额，并在发送页按 ERC20 流程发送
 
 ## 会话与工具流程
 
@@ -227,10 +254,9 @@ dfx deploy
 - `wallet_swap_uniswap`：Uniswap V3 兑换 ERC20（支持 `auto_approve`）
 - `wallet_buy_uni`：自动买 UNI（余额检查、报价、自动授权、下单）
 - `polymarket_research`：拉取 Polymarket 市场候选 + 新闻头条
-- `wallet_buy_cketh`：`<amount_cketh>|<max_icp_e8s>`
 - `tg_send_message`：`<chat_id>|<text>`
 
-其中 `wallet_send_eth / wallet_send_erc20` 当前支持网络：`ethereum`、`base`、`polygon`。
+其中 `wallet_send_eth / wallet_send_erc20` 当前支持网络：`ethereum`、`sepolia`、`base`、`polygon`、`arbitrum`、`optimism`、`bsc`、`avalanche`，以及自定义 `eip155:<chainId>`（需提供 `rpcUrl`）。
 
 工具可见性说明：
 
@@ -268,26 +294,26 @@ dfx deploy
   - `x-discord-signature-ed25519`（存在）
   - `x-discord-signature-timestamp`（存在）
 
-## 钱包与 ckETH 说明
+## 钱包说明
 
 - ETH/ERC20：由后端查 nonce/gas、签名、广播
-- RPC 默认配置集中在：`backend/openclaw/wallet/RpcConfig.mo`
+- RPC 默认配置集中在：`backend/agentonicp/wallet/RpcConfig.mo`
   - `ethereum/eth/mainnet` -> `https://ethereum-rpc.publicnode.com`
+  - `sepolia/eth-sepolia` -> `https://ethereum-sepolia-rpc.publicnode.com`
   - `base` -> `https://base-rpc.publicnode.com`
   - `polygon/matic` -> `https://polygon-bor-rpc.publicnode.com`
+  - `arbitrum/arb` -> `https://arbitrum-one-rpc.publicnode.com`
+  - `optimism/op` -> `https://optimism-rpc.publicnode.com`
+  - `bsc/bnb` -> `https://bsc-rpc.publicnode.com`
+  - `avalanche/avax` -> `https://avalanche-c-chain-rpc.publicnode.com`
   - `solana` -> `https://solana-rpc.publicnode.com`（预留，当前未接入 Solana 转账/签名流程）
-- 代币/合约地址集中在：`backend/openclaw/wallet/TokenConfig.mo`
+- 代币/合约地址集中在：`backend/agentonicp/wallet/TokenConfig.mo`
 - `wallet_swap_uniswap`：
   - Uniswap V3 `exactInputSingle`
   - `autoApprove=true` 时先检查 allowance，不足则先发 `approve`
 - `wallet_buy_uni`：
   - 先检查 ETH gas 预留、USDC/USDT 余额
   - 用 Quoter 报价，自动选更优输入币，再执行兑换
-- `wallet_buy_cketh`：
-  - 支持 `{amount}`、`{amountWei}` 占位符 URL 模板
-  - 先比较报价源，选更便宜 venue
-  - 若对应 broker 未配置，返回 `quote_only=true`
-
 ## API Key 处理
 
 - `sessions_send` 的 `opts.apiKey` 非空时，优先使用调用时传入值
@@ -347,10 +373,6 @@ dfx deploy
 - `tg_status()`
 - `admin_set_discord(proxySecret)`
 - `discord_status()`
-- `admin_set_cketh_broker(canisterText)`
-- `admin_set_cketh_brokers(icpswapCanisterText, kongswapCanisterText)`
-- `admin_set_cketh_quote_sources(icpswapQuoteUrl, kongswapQuoteUrl)`
-- `cketh_status()`
 
 ### 钱包
 
@@ -370,8 +392,6 @@ dfx deploy
 - `wallet_balance_icrc1(ledgerPrincipalText)`
 - `wallet_balance_eth(network, rpcUrl)`
 - `wallet_balance_erc20(network, rpcUrl, tokenAddress)`
-- `wallet_buy_cketh(amountCkEthText, maxIcpE8s)`
-- `wallet_buy_cketh_one(maxIcpE8s)`
 - `ecdsa_public_key(derivationPath, keyName)`
 - `sign_with_ecdsa(messageHash, derivationPath, keyName)`
 
