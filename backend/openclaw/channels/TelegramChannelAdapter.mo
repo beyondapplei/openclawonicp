@@ -3,6 +3,7 @@ import Text "mo:base/Text";
 import TrieMap "mo:base/TrieMap";
 
 import ChannelRouter "./ChannelRouter";
+import ChannelDock "./ChannelDock";
 import HttpTypes "../http/HttpTypes";
 import Llm "../llm/Llm";
 import Sessions "../core/Sessions";
@@ -31,7 +32,7 @@ module {
   };
 
   func isTelegramWebhook(req : InHttpRequest) : Bool {
-    req.method == "POST" and Text.startsWith(req.url, #text "/tg/webhook")
+    req.method == "POST" and Text.startsWith(req.url, #text(ChannelDock.telegram.webhookPrefix))
   };
 
   public func queryHandler() : ChannelRouter.QueryHandler {

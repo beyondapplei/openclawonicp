@@ -7,8 +7,12 @@ import ToolTypes "./ToolTypes";
 module {
   public let spec : ToolTypes.ToolSpec = {
     name = "wallet_send_icp";
-    argsHint = "<to_principal>|<amount_e8s>";
-    rule = "send ICP, 1 ICP = 100000000 e8s";
+    description = "Send ICP from the agent wallet. 1 ICP = 100000000 e8s.";
+    parametersJson = "{\"type\":\"object\",\"properties\":{\"to_principal\":{\"type\":\"string\",\"description\":\"Destination principal\"},\"amount_e8s\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Amount in e8s\"}},\"required\":[\"to_principal\",\"amount_e8s\"],\"additionalProperties\":false}";
+    argNames = ["to_principal", "amount_e8s"];
+    permission = #owner;
+    exposeToLlm = true;
+    exposeToApi = true;
   };
 
   public func run(args : [Text], deps : ToolTypes.DispatchDeps) : async ToolTypes.ToolResult {

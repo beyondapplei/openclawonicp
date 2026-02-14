@@ -30,6 +30,16 @@ export const idlFactory = ({ IDL }) => {
     'hasKongswapQuoteUrl' : IDL.Bool,
     'hasIcpswapQuoteUrl' : IDL.Bool,
   });
+  const LlmTrace = IDL.Record({
+    'id' : IDL.Nat,
+    'url' : IDL.Text,
+    'model' : IDL.Text,
+    'provider' : IDL.Text,
+    'tsNs' : IDL.Int,
+    'error' : IDL.Opt(IDL.Text),
+    'responseBody' : IDL.Opt(IDL.Text),
+    'requestBody' : IDL.Text,
+  });
   const DiscordStatus = IDL.Record({
     'hasLlmConfig' : IDL.Bool,
     'hasProxySecret' : IDL.Bool,
@@ -137,8 +147,8 @@ export const idlFactory = ({ IDL }) => {
   const ToolResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const BalanceResult = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
   const BuyCkEthResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
-  const EthAddressResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const SendEthResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
+  const EthAddressResult = IDL.Variant({ 'ok' : IDL.Text, 'err' : IDL.Text });
   const SendIcpResult = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
   const SendIcrc1Result = IDL.Variant({ 'ok' : IDL.Nat, 'err' : IDL.Text });
   return IDL.Service({
@@ -162,6 +172,11 @@ export const idlFactory = ({ IDL }) => {
     'agent_wallet' : IDL.Func([], [WalletResult], []),
     'canister_principal' : IDL.Func([], [IDL.Principal], ['query']),
     'cketh_status' : IDL.Func([], [CkEthStatus], []),
+    'dev_llm_traces' : IDL.Func(
+        [IDL.Nat, IDL.Nat],
+        [IDL.Vec(LlmTrace)],
+        ['query'],
+      ),
     'discord_status' : IDL.Func([], [DiscordStatus], []),
     'ecdsa_public_key' : IDL.Func(
         [IDL.Vec(IDL.Vec(IDL.Nat8)), IDL.Opt(IDL.Text)],
@@ -244,6 +259,27 @@ export const idlFactory = ({ IDL }) => {
     'wallet_balance_icrc1' : IDL.Func([IDL.Text], [BalanceResult], []),
     'wallet_buy_cketh' : IDL.Func([IDL.Text, IDL.Nat64], [BuyCkEthResult], []),
     'wallet_buy_cketh_one' : IDL.Func([IDL.Nat64], [BuyCkEthResult], []),
+    'wallet_buy_erc20_uniswap' : IDL.Func(
+        [
+          IDL.Text,
+          IDL.Opt(IDL.Text),
+          IDL.Text,
+          IDL.Text,
+          IDL.Text,
+          IDL.Nat,
+          IDL.Nat,
+          IDL.Nat,
+          IDL.Nat,
+          IDL.Nat,
+        ],
+        [SendEthResult],
+        [],
+      ),
+    'wallet_buy_uni' : IDL.Func(
+        [IDL.Text, IDL.Opt(IDL.Text), IDL.Nat, IDL.Nat, IDL.Nat],
+        [SendEthResult],
+        [],
+      ),
     'wallet_eth_address' : IDL.Func([], [EthAddressResult], []),
     'wallet_send_erc20' : IDL.Func(
         [IDL.Text, IDL.Opt(IDL.Text), IDL.Text, IDL.Text, IDL.Nat],
@@ -265,6 +301,11 @@ export const idlFactory = ({ IDL }) => {
         [IDL.Text, IDL.Text, IDL.Nat, IDL.Opt(IDL.Nat)],
         [SendIcrc1Result],
         [],
+      ),
+    'wallet_token_address' : IDL.Func(
+        [IDL.Text, IDL.Text],
+        [IDL.Opt(IDL.Text)],
+        ['query'],
       ),
     'whoami' : IDL.Func([], [IDL.Text], []),
   });

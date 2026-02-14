@@ -95,6 +95,112 @@ module {
     await EthTx.sendErc20(ic, transform, httpCycles, ic00, caller, canisterId, network, rpcUrl, tokenAddress, toAddress, amount)
   };
 
+  public func buyErc20Uniswap(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    ic00 : Wallet.Ic00,
+    caller : Principal,
+    canisterId : Principal,
+    network : Text,
+    rpcUrl : ?Text,
+    routerAddress : Text,
+    tokenInAddress : Text,
+    tokenOutAddress : Text,
+    fee : Nat,
+    amountIn : Nat,
+    amountOutMinimum : Nat,
+    deadline : Nat,
+    sqrtPriceLimitX96 : Nat,
+  ) : async SendEthResult {
+    await EthTx.buyErc20Uniswap(
+      ic,
+      transform,
+      httpCycles,
+      ic00,
+      caller,
+      canisterId,
+      network,
+      rpcUrl,
+      routerAddress,
+      tokenInAddress,
+      tokenOutAddress,
+      fee,
+      amountIn,
+      amountOutMinimum,
+      deadline,
+      sqrtPriceLimitX96,
+    )
+  };
+
+  public func swapErc20Uniswap(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    ic00 : Wallet.Ic00,
+    caller : Principal,
+    canisterId : Principal,
+    network : Text,
+    rpcUrl : ?Text,
+    routerAddress : Text,
+    tokenInAddress : Text,
+    tokenOutAddress : Text,
+    fee : Nat,
+    amountIn : Nat,
+    amountOutMinimum : Nat,
+    deadline : Nat,
+    sqrtPriceLimitX96 : Nat,
+    autoApprove : Bool,
+  ) : async SendEthResult {
+    await EthTx.swapErc20Uniswap(
+      ic,
+      transform,
+      httpCycles,
+      ic00,
+      caller,
+      canisterId,
+      network,
+      rpcUrl,
+      routerAddress,
+      tokenInAddress,
+      tokenOutAddress,
+      fee,
+      amountIn,
+      amountOutMinimum,
+      deadline,
+      sqrtPriceLimitX96,
+      autoApprove,
+    )
+  };
+
+  public func buyUniAuto(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    ic00 : Wallet.Ic00,
+    caller : Principal,
+    canisterId : Principal,
+    network : Text,
+    rpcUrl : ?Text,
+    amountUniBase : Nat,
+    slippageBps : Nat,
+    deadline : Nat,
+  ) : async SendEthResult {
+    await EthTx.buyUniAuto(
+      ic,
+      transform,
+      httpCycles,
+      ic00,
+      caller,
+      canisterId,
+      network,
+      rpcUrl,
+      amountUniBase,
+      slippageBps,
+      deadline,
+    )
+  };
+
   public func balanceEth(
     ic : Llm.Http,
     transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,

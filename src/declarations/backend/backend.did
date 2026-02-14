@@ -98,6 +98,17 @@ type ModelsResult =
    err: text;
    ok: vec text;
  };
+type LlmTrace = 
+ record {
+   error: opt text;
+   id: nat;
+   model: text;
+   provider: text;
+   requestBody: text;
+   responseBody: opt text;
+   tsNs: int;
+   url: text;
+ };
 type InHttpResponse = 
  record {
    body: blob;
@@ -226,6 +237,7 @@ service : {
   agent_wallet: () -> (WalletResult);
   canister_principal: () -> (principal) query;
   cketh_status: () -> (CkEthStatus);
+  dev_llm_traces: (afterId: nat, limit: nat) -> (vec LlmTrace) query;
   discord_status: () -> (DiscordStatus);
   ecdsa_public_key: (derivationPath: vec blob, keyName: opt text) ->
    (EcdsaPublicKeyResult);
@@ -267,6 +279,12 @@ service : {
   wallet_buy_cketh: (amountCkEthText: text, maxIcpE8s: nat64) ->
    (BuyCkEthResult);
   wallet_buy_cketh_one: (maxIcpE8s: nat64) -> (BuyCkEthResult);
+  wallet_buy_erc20_uniswap: (network: text, rpcUrl: opt text, routerAddress:
+   text, tokenInAddress: text, tokenOutAddress: text, fee: nat, amountIn:
+   nat, amountOutMinimum: nat, deadline: nat, sqrtPriceLimitX96: nat) ->
+   (SendEthResult);
+  wallet_buy_uni: (network: text, rpcUrl: opt text, amountUniBase: nat,
+   slippageBps: nat, deadline: nat) -> (SendEthResult);
   wallet_eth_address: () -> (EthAddressResult);
   wallet_send_erc20: (network: text, rpcUrl: opt text, tokenAddress: 
    text, toAddress: text, amount: nat) -> (SendEthResult);
@@ -278,5 +296,6 @@ service : {
    (SendIcpResult);
   wallet_send_icrc1: (ledgerPrincipalText: text, toPrincipalText: text,
    amount: nat, fee: opt nat) -> (SendIcrc1Result);
+  wallet_token_address: (network: text, symbol: text) -> (opt text) query;
   whoami: () -> (text);
 }

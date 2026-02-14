@@ -1,6 +1,8 @@
 import Buffer "mo:base/Buffer";
+import Char "mo:base/Char";
 import Float "mo:base/Float";
 import Nat "mo:base/Nat";
+import Nat32 "mo:base/Nat32";
 import Principal "mo:base/Principal";
 import Result "mo:base/Result";
 import Text "mo:base/Text";
@@ -11,6 +13,7 @@ import Json "../http/Json";
 import Llm "../llm/Llm";
 import Skills "./Skills";
 import Store "./Store";
+import ToolTypes "../llm/ToolTypes";
 import Types "./Types";
 
 module {
@@ -26,11 +29,9 @@ module {
   ) -> async Result.Result<Text, Text>;
 
   public type ToolCaller = (name : Text, args : [Text]) -> async Types.ToolResult;
-  public type ToolSpec = {
-    name : Text;
-    argsHint : Text;
-    rule : Text;
-  };
+  public type ToolSpec = ToolTypes.ToolSpec;
+
+  let maxToolSteps : Nat = 1;
 
   public func create(users : TrieMap.TrieMap<Principal, Store.UserState>, caller : Principal, sessionId : Text, nowNs : () -> Int) {
     let u = Store.getOrInitUser(users, caller);
@@ -102,12 +103,14 @@ module {
 
       let cmd = Text.toLowercase(trimmed);
       if (cmd == "/help") {
-        return localAssistant(s, nowNs,
+        return localAssistant(
+          s,
+          nowNs,
           "Available commands:\n" #
           "/help\n" #
           "/status\n" #
           "/new\n" #
-          "/reset"
+          "/reset",
         );
       };
 
@@ -147,9 +150,7 @@ module {
       case null {};
     };
 
-    let baseSysPrompt = Skills.buildSystemPrompt(u, opts.systemPrompt, opts.skillNames);
-    let toolPrompt = "";
-    let sysPrompt = baseSysPrompt # toolPrompt;
+    let sysPrompt = Skills.buildSystemPrompt(u, opts.systemPrompt, opts.skillNames);
     let hist = if (opts.includeHistory) lastMessages(s, 20) else [{ role = #user; content = message; tsNs = ts }];
 
     let rawResult = await callModel(
@@ -163,46 +164,83 @@ module {
       opts.temperature,
     );
     switch (rawResult) {
-      case (#err(e)) { #err(e) };
+      case (#err(e)) #err(e);
       case (#ok(raw)) {
-        switch (parseStructuredToolCall(opts.provider, raw)) {
-          case (?toolCall) {
-            switch (callTool) {
-              case null {
-                let msg : Types.ChatMessage = {
-                  role = #assistant;
-                  content = "模型请求调用工具 " # toolCall.name # "，但当前未启用工具调用。";
-                  tsNs = nowNs();
-                };
-                s.messages.add(msg);
-                s.updatedAtNs := msg.tsNs;
-                return #ok({ assistant = msg; raw = ?raw });
-              };
-              case (?invokeTool) {
-                return await runToolAndFinalize(
-                  s,
-                  nowNs,
-                  invokeTool,
-                  toolCall,
-                  opts,
-                  callModel,
-                  toolSpecs,
-                  sysPrompt,
-                  ?raw,
-                );
-              };
-            }
-          };
-          case null {};
-        };
+        await continueModelWithTools(
+          s,
+          nowNs,
+          raw,
+          0,
+          opts,
+          callModel,
+          callTool,
+          toolSpecs,
+          sysPrompt,
+        )
+      };
+    }
+  };
 
+  func continueModelWithTools(
+    s : Store.SessionState,
+    nowNs : () -> Int,
+    raw : Text,
+    toolSteps : Nat,
+    opts : Types.SendOptions,
+    _callModel : ModelCaller,
+    callTool : ?ToolCaller,
+    toolSpecs : [ToolSpec],
+    _sysPrompt : Text,
+  ) : async Types.SendResult {
+    switch (parseStructuredToolCall(opts.provider, raw, toolSpecs)) {
+      case null {
         switch (Llm.extract(opts.provider, raw)) {
-          case null { #err("model response parse failed") };
           case (?assistantText) {
             let msg : Types.ChatMessage = { role = #assistant; content = assistantText; tsNs = nowNs() };
             s.messages.add(msg);
             s.updatedAtNs := msg.tsNs;
             #ok({ assistant = msg; raw = ?raw })
+          };
+          case null {
+            if (toolSteps == 0) {
+              #err("model response parse failed")
+            } else {
+              localAssistant(s, nowNs, "工具执行完成，但模型未返回可解析文本。")
+            }
+          };
+        }
+      };
+      case (?toolCall) {
+        switch (callTool) {
+          case null {
+            let msg : Types.ChatMessage = {
+              role = #assistant;
+              content = "模型请求调用工具 " # toolCall.name # "，但当前未启用工具调用。";
+              tsNs = nowNs();
+            };
+            s.messages.add(msg);
+            s.updatedAtNs := msg.tsNs;
+            #ok({ assistant = msg; raw = ?raw })
+          };
+          case (?invokeTool) {
+            if (toolSteps >= maxToolSteps) {
+              return localAssistant(
+                s,
+                nowNs,
+                "工具调用达到上限（" # Nat.toText(maxToolSteps) # "），已停止继续调用。",
+              );
+            };
+
+            let toolRes = await invokeTool(toolCall.name, toolCall.args);
+            let toolMsgText = switch (toolRes) {
+              case (#ok(v)) toolCall.name # " ok: " # v;
+              case (#err(e)) toolCall.name # " err: " # e;
+            };
+            let toolMsg : Types.ChatMessage = { role = #tool; content = toolMsgText; tsNs = nowNs() };
+            s.messages.add(toolMsg);
+            // Single-pass mode: execute tool once and return directly,
+            // without calling the model a second time.
+            fallbackToolSummary(s, nowNs, toolCall, toolRes, ?raw)
           };
         }
       };
@@ -214,56 +252,6 @@ module {
     s.messages.add(msg);
     s.updatedAtNs := msg.tsNs;
     #ok({ assistant = msg; raw = null })
-  };
-
-  func runToolAndFinalize(
-    s : Store.SessionState,
-    nowNs : () -> Int,
-    invokeTool : ToolCaller,
-    toolCall : ParsedToolCall,
-    opts : Types.SendOptions,
-    callModel : ModelCaller,
-    toolSpecs : [ToolSpec],
-    sysPrompt : Text,
-    firstRaw : ?Text,
-  ) : async Types.SendResult {
-    let toolRes = await invokeTool(toolCall.name, toolCall.args);
-    let toolMsgText = switch (toolRes) {
-      case (#ok(v)) toolCall.name # " ok: " # v;
-      case (#err(e)) toolCall.name # " err: " # e;
-    };
-    let toolMsg : Types.ChatMessage = { role = #tool; content = toolMsgText; tsNs = nowNs() };
-    s.messages.add(toolMsg);
-
-    let hist2 = lastMessages(s, 20);
-    let raw2Result = await callModel(
-      opts.provider,
-      opts.model,
-      opts.apiKey,
-      sysPrompt,
-      hist2,
-      toolSpecs,
-      opts.maxTokens,
-      opts.temperature,
-    );
-
-    switch (raw2Result) {
-      case (#ok(raw2)) {
-        if (parseStructuredToolCall(opts.provider, raw2) != null) {
-          return fallbackToolSummary(s, nowNs, toolCall, toolRes, firstRaw);
-        };
-        switch (Llm.extract(opts.provider, raw2)) {
-          case (?assistantText) {
-            let msg : Types.ChatMessage = { role = #assistant; content = assistantText; tsNs = nowNs() };
-            s.messages.add(msg);
-            s.updatedAtNs := msg.tsNs;
-            #ok({ assistant = msg; raw = ?raw2 })
-          };
-          case null fallbackToolSummary(s, nowNs, toolCall, toolRes, firstRaw);
-        }
-      };
-      case (#err(_)) fallbackToolSummary(s, nowNs, toolCall, toolRes, firstRaw);
-    }
   };
 
   func fallbackToolSummary(
@@ -309,15 +297,15 @@ module {
     args : [Text];
   };
 
-  func parseStructuredToolCall(provider : Types.Provider, raw : Text) : ?ParsedToolCall {
+  func parseStructuredToolCall(provider : Types.Provider, raw : Text, toolSpecs : [ToolSpec]) : ?ParsedToolCall {
     switch (provider) {
-      case (#openai) parseOpenAIToolCall(raw);
-      case (#anthropic) parseAnthropicToolCall(raw);
-      case (#google) parseGoogleToolCall(raw);
+      case (#openai) parseOpenAIToolCall(raw, toolSpecs);
+      case (#anthropic) parseAnthropicToolCall(raw, toolSpecs);
+      case (#google) parseGoogleToolCall(raw, toolSpecs);
     }
   };
 
-  func parseOpenAIToolCall(raw : Text) : ?ParsedToolCall {
+  func parseOpenAIToolCall(raw : Text, toolSpecs : [ToolSpec]) : ?ParsedToolCall {
     let segments = Text.split(raw, #text "\"tool_calls\"");
     ignore segments.next();
     let after = switch (segments.next()) {
@@ -331,20 +319,17 @@ module {
     };
     if (Text.size(name) == 0) return null;
 
-    let argsJson = switch (Json.extractStringAfterAny(after, ["\"arguments\":\"", "\"arguments\": \""])) {
-      case null return ?{ name; args = [] };
+    let argsObj = switch (Json.extractStringAfterAny(after, ["\"arguments\":\"", "\"arguments\": \""])) {
+      case null "{}";
       case (?v) v;
     };
-
-    let argsLine = switch (Json.extractStringAfterAny(argsJson, ["\"args_line\":\"", "\"args_line\": \""])) {
-      case null "";
-      case (?v) v;
-    };
-
-    ?{ name; args = splitArgsLine(argsLine) }
+    ?{
+      name;
+      args = argsFromJsonObject(name, argsObj, toolSpecs);
+    }
   };
 
-  func parseAnthropicToolCall(raw : Text) : ?ParsedToolCall {
+  func parseAnthropicToolCall(raw : Text, toolSpecs : [ToolSpec]) : ?ParsedToolCall {
     let segments = Text.split(raw, #text "\"type\":\"tool_use\"");
     ignore segments.next();
     let after = switch (segments.next()) {
@@ -358,15 +343,17 @@ module {
     };
     if (Text.size(name) == 0) return null;
 
-    let argsLine = switch (Json.extractStringAfterAny(after, ["\"args_line\":\"", "\"args_line\": \""])) {
-      case null "";
+    let argsObj = switch (Json.extractObjectAfterAny(after, ["\"input\":", "\"input\": "])) {
+      case null "{}";
       case (?v) v;
     };
-
-    ?{ name; args = splitArgsLine(argsLine) }
+    ?{
+      name;
+      args = argsFromJsonObject(name, argsObj, toolSpecs);
+    }
   };
 
-  func parseGoogleToolCall(raw : Text) : ?ParsedToolCall {
+  func parseGoogleToolCall(raw : Text, toolSpecs : [ToolSpec]) : ?ParsedToolCall {
     let segments = Text.split(raw, #text "\"functionCall\"");
     ignore segments.next();
     let after = switch (segments.next()) {
@@ -380,20 +367,97 @@ module {
     };
     if (Text.size(name) == 0) return null;
 
-    let argsLine = switch (Json.extractStringAfterAny(after, ["\"args_line\":\"", "\"args_line\": \""])) {
-      case null "";
+    let argsObj = switch (Json.extractObjectAfterAny(after, ["\"args\":", "\"args\": "])) {
+      case null "{}";
       case (?v) v;
     };
-
-    ?{ name; args = splitArgsLine(argsLine) }
+    ?{
+      name;
+      args = argsFromJsonObject(name, argsObj, toolSpecs);
+    }
   };
 
-  func splitArgsLine(line : Text) : [Text] {
-    let buf = Buffer.Buffer<Text>(4);
-    for (part in Text.split(line, #text "|")) {
-      let trimmed = Text.trim(part, #char ' ');
-      if (Text.size(trimmed) > 0) buf.add(trimmed);
+  func argsFromJsonObject(name : Text, obj : Text, specs : [ToolSpec]) : [Text] {
+    let spec = switch (findToolSpec(specs, name)) {
+      case null return [];
+      case (?v) v;
     };
-    Buffer.toArray(buf)
+    let out = Buffer.Buffer<Text>(spec.argNames.size());
+    for (argName in spec.argNames.vals()) {
+      switch (extractArgAsText(obj, argName)) {
+        case null out.add("");
+        case (?v) out.add(Text.trim(v, #char ' '));
+      }
+    };
+    Buffer.toArray(out)
+  };
+
+  func findToolSpec(specs : [ToolSpec], name : Text) : ?ToolSpec {
+    for (s in specs.vals()) {
+      if (s.name == name) return ?s;
+    };
+    null
+  };
+
+  func extractArgAsText(obj : Text, key : Text) : ?Text {
+    let quoted = "\"" # key # "\":\"";
+    let quotedSpaced = "\"" # key # "\": \"";
+    switch (Json.extractStringAfterAny(obj, [quoted, quotedSpaced])) {
+      case (?v) return ?v;
+      case null {};
+    };
+
+    let boolTrue = "\"" # key # "\":true";
+    let boolTrueSpaced = "\"" # key # "\": true";
+    if (Text.contains(obj, #text boolTrue) or Text.contains(obj, #text boolTrueSpaced)) {
+      return ?"true";
+    };
+    let boolFalse = "\"" # key # "\":false";
+    let boolFalseSpaced = "\"" # key # "\": false";
+    if (Text.contains(obj, #text boolFalse) or Text.contains(obj, #text boolFalseSpaced)) {
+      return ?"false";
+    };
+
+    let natNeedle = "\"" # key # "\":";
+    let natNeedleSpaced = "\"" # key # "\": ";
+    switch (extractNatAfterAny(obj, [natNeedle, natNeedleSpaced])) {
+      case null null;
+      case (?n) ?Nat.toText(n);
+    }
+  };
+
+  func extractNatAfterAny(raw : Text, needles : [Text]) : ?Nat {
+    for (n in needles.vals()) {
+      switch (extractNatAfter(raw, n)) {
+        case null {};
+        case (?v) return ?v;
+      }
+    };
+    null
+  };
+
+  func extractNatAfter(raw : Text, needle : Text) : ?Nat {
+    let it = Text.split(raw, #text needle);
+    ignore it.next();
+    switch (it.next()) {
+      case null null;
+      case (?after) readNatPrefix(after);
+    }
+  };
+
+  func readNatPrefix(t : Text) : ?Nat {
+    var acc : Nat = 0;
+    var seen = false;
+    for (c in t.chars()) {
+      if (c == ' ' or c == '\n' or c == '\r' or c == '\t') {
+        if (seen) return ?acc;
+      } else if (c >= '0' and c <= '9') {
+        seen := true;
+        acc := acc * 10 + Nat32.toNat(Char.toNat32(c) - Char.toNat32('0'));
+      } else {
+        if (seen) return ?acc else return null;
+      }
+    };
+    if (seen) ?acc else null
   };
 }

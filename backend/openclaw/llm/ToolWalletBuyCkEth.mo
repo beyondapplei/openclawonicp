@@ -7,8 +7,12 @@ import ToolTypes "./ToolTypes";
 module {
   public let spec : ToolTypes.ToolSpec = {
     name = "wallet_buy_cketh";
-    argsHint = "<amount_cketh>|<max_icp_e8s>";
-    rule = "buy ckETH by comparing icpswap/kongswap quotes and choosing cheaper";
+    description = "Buy ckETH by comparing ICPSwap/KongSwap quotes and choosing cheaper venue.";
+    parametersJson = "{\"type\":\"object\",\"properties\":{\"amount_cketh\":{\"type\":\"string\",\"description\":\"ckETH amount text, e.g. 0.5\"},\"max_icp_e8s\":{\"type\":\"integer\",\"minimum\":1,\"description\":\"Max ICP in e8s\"}},\"required\":[\"amount_cketh\",\"max_icp_e8s\"],\"additionalProperties\":false}";
+    argNames = ["amount_cketh", "max_icp_e8s"];
+    permission = #owner;
+    exposeToLlm = true;
+    exposeToApi = true;
   };
 
   public func run(args : [Text], deps : ToolTypes.DispatchDeps) : async ToolTypes.ToolResult {

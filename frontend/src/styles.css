@@ -136,6 +136,11 @@ button:disabled {
 .chat {
   margin-top: 16px;
   min-height: 260px;
+  max-height: min(60vh, 720px);
+  overflow-y: auto;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
   white-space: pre-wrap;
 }
 
@@ -145,6 +150,12 @@ button:disabled {
   border-radius: 12px;
   border: 1px solid rgba(130, 178, 255, 0.2);
   background: rgba(8, 16, 37, 0.7);
+}
+
+.fullContent {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .meta {
@@ -202,6 +213,16 @@ button:disabled {
 
 body.walletFullscreenBody {
   padding: 0;
+}
+
+body.devFullscreenBody {
+  padding: 0;
+}
+
+.devPage {
+  min-height: 100vh;
+  width: 100%;
+  padding: 18px;
 }
 
 .walletPage {

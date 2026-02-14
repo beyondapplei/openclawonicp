@@ -1,5 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { initAuth, loginWithII, logoutII } from './auth';
+import {
+  publishEventToDevWindow,
+  publishHistoryToDevWindow,
+} from './devWindowSync';
 
 const I18N = {
   zh: {
@@ -27,6 +31,7 @@ const I18N = {
     login: 'Identity 登录',
     logout: '退出登录',
     wallet: '钱包',
+    devWindow: '开发窗口',
     principal: 'Principal',
     canisterId: '后端 Canister ID',
     icpRecv: 'Agent ICP 接收地址',
@@ -94,6 +99,7 @@ const I18N = {
     login: 'Login with Identity',
     logout: 'Logout',
     wallet: 'Wallet',
+    devWindow: 'Dev Window',
     principal: 'Principal',
     canisterId: 'Backend Canister ID',
     icpRecv: 'ICP Receive Address',
@@ -150,8 +156,58 @@ function toMs(tsNs) {
   return Math.floor(Number(tsNs) / 1_000_000);
 }
 
+function toBigIntNat(v) {
+  if (typeof v === 'bigint') return v;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0n;
+  return BigInt(Math.floor(n));
+}
+
+function readOptText(v) {
+  return Array.isArray(v) && v.length > 0 && typeof v[0] === 'string' ? v[0] : '';
+}
+
+const CHAT_PREFS_KEY = 'openclaw.main.chat_prefs.v1';
+const DEFAULT_PROVIDER = 'openai';
+const DEFAULT_MODEL = 'gpt-4o-mini';
+
+function normalizeProvider(v) {
+  if (v === 'openai' || v === 'anthropic' || v === 'google') return v;
+  return DEFAULT_PROVIDER;
+}
+
+function readChatPrefs() {
+  if (typeof window === 'undefined') {
+    return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL, apiKey: '' };
+  }
+  try {
+    const raw = window.localStorage.getItem(CHAT_PREFS_KEY);
+    if (!raw) return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL, apiKey: '' };
+    const parsed = JSON.parse(raw);
+    const provider = normalizeProvider(parsed?.provider);
+    const model = typeof parsed?.model === 'string' && parsed.model.trim() ? parsed.model : DEFAULT_MODEL;
+    const apiKey = typeof parsed?.apiKey === 'string' ? parsed.apiKey : '';
+    return { provider, model, apiKey };
+  } catch (_) {
+    return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL, apiKey: '' };
+  }
+}
+
+function writeChatPrefs(provider, model, apiKey) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(
+    CHAT_PREFS_KEY,
+    JSON.stringify({
+      provider: normalizeProvider(provider),
+      model: typeof model === 'string' && model.trim() ? model : DEFAULT_MODEL,
+      apiKey: typeof apiKey === 'string' ? apiKey : '',
+    }),
+  );
+}
+
 export default function App() {
   const SESSION_ID = 'main';
+  const initialChatPrefs = useMemo(() => readChatPrefs(), []);
   const [lang, setLang] = useState('zh');
   const t = useMemo(() => I18N[lang] ?? I18N.zh, [lang]);
 
@@ -163,9 +219,9 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [ownerPrincipalText, setOwnerPrincipalText] = useState('');
 
-  const [provider, setProvider] = useState('openai');
-  const [model, setModel] = useState('gpt-4o-mini');
-  const [apiKey, setApiKey] = useState('');
+  const [provider, setProvider] = useState(initialChatPrefs.provider);
+  const [model, setModel] = useState(initialChatPrefs.model);
+  const [apiKey, setApiKey] = useState(initialChatPrefs.apiKey);
   const [message, setMessage] = useState('');
 
   const [googleModels, setGoogleModels] = useState([]);
@@ -176,6 +232,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [skills, setSkills] = useState([]);
   const [selectedSkills, setSelectedSkills] = useState([]);
+  const [lastLlmTraceId, setLastLlmTraceId] = useState(0n);
 
   function principalToText(p) {
     if (!p) return '';
@@ -230,6 +287,7 @@ export default function App() {
     if (!actor) return;
     const h = await actor.sessions_history(SESSION_ID, 50);
     setHistory(h);
+    publishHistoryToDevWindow(h);
   }
 
   async function loadSkills(a = actor) {
@@ -247,6 +305,79 @@ export default function App() {
     }
   }
 
+  async function initializeLlmTraceCursor(a = actor) {
+    if (!a || !isAuthed) {
+      setLastLlmTraceId(0n);
+      return;
+    }
+    try {
+      const traces = await a.dev_llm_traces(0n, 500n);
+      let maxId = 0n;
+      if (Array.isArray(traces)) {
+        for (const trace of traces) {
+          const id = toBigIntNat(trace?.id);
+          if (id > maxId) maxId = id;
+        }
+      }
+      setLastLlmTraceId(maxId);
+    } catch (_) {
+      setLastLlmTraceId(0n);
+    }
+  }
+
+  async function pullLlmTraces(a = actor) {
+    if (!a || !isAuthed) return;
+    try {
+      const traces = await a.dev_llm_traces(lastLlmTraceId, 100n);
+      if (!Array.isArray(traces) || traces.length === 0) return;
+
+      let maxId = lastLlmTraceId;
+      for (const trace of traces) {
+        const id = toBigIntNat(trace?.id);
+        if (id > maxId) maxId = id;
+
+        const providerText = typeof trace?.provider === 'string' ? trace.provider : '';
+        const modelText = typeof trace?.model === 'string' ? trace.model : '';
+        const urlText = typeof trace?.url === 'string' ? trace.url : '';
+        const requestBody = typeof trace?.requestBody === 'string' ? trace.requestBody : String(trace?.requestBody ?? '');
+        const responseBody = readOptText(trace?.responseBody);
+        const errorText = readOptText(trace?.error);
+
+        publishEventToDevWindow({
+          type: 'llm_request',
+          content: `URL: ${urlText}\n\n${requestBody}`,
+          sessionId: SESSION_ID,
+          provider: providerText,
+          model: modelText,
+        });
+
+        if (responseBody) {
+          publishEventToDevWindow({
+            type: 'llm_response',
+            content: responseBody,
+            sessionId: SESSION_ID,
+            provider: providerText,
+            model: modelText,
+          });
+        }
+
+        if (errorText) {
+          publishEventToDevWindow({
+            type: 'llm_error',
+            content: errorText,
+            sessionId: SESSION_ID,
+            provider: providerText,
+            model: modelText,
+          });
+        }
+      }
+
+      setLastLlmTraceId(maxId);
+    } catch (_) {
+      // Dev traces are best-effort and must not block chat UX.
+    }
+  }
+
   function toggleSkill(name) {
     setSelectedSkills((prev) => {
       if (prev.includes(name)) return prev.filter((n) => n !== name);
@@ -257,6 +388,14 @@ export default function App() {
   async function sendMessage() {
     if (!model.trim()) return setStatus(t.needModel);
     if (!message.trim()) return setStatus(t.needMsg);
+
+    publishEventToDevWindow({
+      type: 'sent',
+      content: message,
+      sessionId: SESSION_ID,
+      provider,
+      model: model.trim(),
+    });
 
     setBusy(true);
     setStatus(t.sending);
@@ -269,20 +408,43 @@ export default function App() {
       maxTokens: [],
       temperature: [],
       skillNames: selectedSkills,
-      includeHistory: true,
+      includeHistory: false,
     };
 
     try {
       if (!actor) throw new Error('backend actor not ready');
       const res = await actor.sessions_send(SESSION_ID, message, opts);
+      await pullLlmTraces(actor);
       if ('ok' in res) {
+        publishEventToDevWindow({
+          type: 'received',
+          content: res.ok?.assistant?.content ?? '',
+          sessionId: SESSION_ID,
+          provider,
+          model: model.trim(),
+        });
         setMessage('');
         await refresh();
         setStatus(t.done);
       } else {
+        publishEventToDevWindow({
+          type: 'error',
+          content: res.err,
+          sessionId: SESSION_ID,
+          provider,
+          model: model.trim(),
+        });
         setStatus(`${t.errPrefix}${res.err}`);
       }
     } catch (e) {
+      await pullLlmTraces(actor);
+      publishEventToDevWindow({
+        type: 'error',
+        content: String(e),
+        sessionId: SESSION_ID,
+        provider,
+        model: model.trim(),
+      });
       setStatus(`${t.exPrefix}${String(e)}`);
     } finally {
       setBusy(false);
@@ -296,6 +458,13 @@ export default function App() {
       if (!actor) throw new Error('backend actor not ready');
       await actor.sessions_reset(SESSION_ID);
       await refresh();
+      publishEventToDevWindow({
+        type: 'reset',
+        content: 'session reset',
+        sessionId: SESSION_ID,
+        provider,
+        model: model.trim(),
+      });
       setStatus(t.resetDone);
     } catch (e) {
       setStatus(`${t.exPrefix}${String(e)}`);
@@ -351,6 +520,7 @@ export default function App() {
     void refresh();
     void refreshWallet(actor);
     void loadSkills(actor);
+    void initializeLlmTraceCursor(actor);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actor, isAuthed, authClient]);
 
@@ -358,6 +528,10 @@ export default function App() {
     // Provide a sensible default when switching provider.
     if (provider === 'google' && model === 'gpt-4o-mini') setModel('gemini-1.5-flash');
   }, [provider]);
+
+  useEffect(() => {
+    writeChatPrefs(provider, model, apiKey);
+  }, [provider, model, apiKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -376,7 +550,9 @@ export default function App() {
         if ('ok' in res) {
           const models = res.ok || [];
           setGoogleModels(models);
-          if (models.length > 0) setModel(models[0]);
+          if (models.length > 0) {
+            setModel((current) => (current && models.includes(current) ? current : models[0]));
+          }
         } else {
           setGoogleModels([]);
           setStatus(`${t.errPrefix}${res.err}`);
@@ -451,6 +627,10 @@ export default function App() {
     window.location.href = 'wallet.html';
   }
 
+  function openDevWindow() {
+    window.location.href = 'dev.html';
+  }
+
   const canAccess = !!(isAuthed && principalText && ownerPrincipalText && principalText === ownerPrincipalText);
   const showLoginOnly = !authLoading && !canAccess;
 
@@ -489,6 +669,9 @@ export default function App() {
         </button>
         <button type="button" onClick={openWalletPage} style={{ marginRight: 8 }}>
           {t.wallet}
+        </button>
+        <button type="button" onClick={openDevWindow} style={{ marginRight: 8 }}>
+          {t.devWindow}
         </button>
         <button type="button" onClick={() => setLang((v) => (v === 'zh' ? 'en' : 'zh'))}>
           {t.lang}
@@ -600,7 +783,7 @@ export default function App() {
               <div className="meta">
                 {role} · {new Date(toMs(m.tsNs)).toLocaleString()}
               </div>
-              <div>{m.content}</div>
+              <div className="fullContent">{m.content}</div>
             </div>
           );
         })}

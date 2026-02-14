@@ -10,6 +10,8 @@ import HttpTypes "../http/HttpTypes";
 import Llm "../llm/Llm";
 import Sessions "../core/Sessions";
 import Store "../core/Store";
+import Dispatch "../auto_reply/Dispatch";
+import ChannelDock "../channels/ChannelDock";
 import Telegram "./Telegram";
 import Types "../core/Types";
 
@@ -130,8 +132,18 @@ module {
           case (?o) o;
         };
 
-        let sessionId = "tg:" # Nat.toText(u.chatId);
-        let sendRes = await Sessions.send(users, canisterPrincipal, sessionId, u.text, opts, nowNs, modelCaller, ?toolCaller, toolSpecs);
+        let sessionId = ChannelDock.sessionIdFor(ChannelDock.telegram, Nat.toText(u.chatId));
+        let sendRes = await Dispatch.dispatchInboundMessage({
+          users = users;
+          caller = canisterPrincipal;
+          sessionId = sessionId;
+          message = u.text;
+          opts = opts;
+          nowNs = nowNs;
+          modelCaller = modelCaller;
+          toolCaller = ?toolCaller;
+          toolSpecs = toolSpecs;
+        });
         switch (sendRes) {
           case (#err(_)) {};
           case (#ok(ok)) {

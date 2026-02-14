@@ -13,6 +13,7 @@ import Types "../core/Types";
 
 module {
   public type Http = actor { http_request : HttpTypes.HttpRequestArgs -> async HttpTypes.HttpResponsePayload };
+  public type RequestPreview = { url : Text; body : Text };
 
   public func extract(provider : Types.Provider, raw : Text) : ?Text {
     switch (provider) {
@@ -67,6 +68,24 @@ module {
       case null #err("response body is not valid UTF-8");
       case (?t) #ok(t);
     }
+  };
+
+  public func previewRequest(
+    provider : Types.Provider,
+    model : Text,
+    apiKey : Text,
+    sysPrompt : Text,
+    history : [Types.ChatMessage],
+    toolSpecs : [ToolTypes.ToolSpec],
+    maxTokens : ?Nat,
+    temperature : ?Float,
+  ) : RequestPreview {
+    let (url, _headers, bodyText) = switch (provider) {
+      case (#openai) buildOpenAIRequest(model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature);
+      case (#anthropic) buildAnthropicRequest(model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature);
+      case (#google) buildGoogleRequest(model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature);
+    };
+    { url; body = bodyText }
   };
 
   public func listModels(
@@ -181,19 +200,11 @@ module {
 
     let defs = Buffer.Buffer<Text>(specs.size());
     for (spec in specs.vals()) {
-      let description =
-        "Use this tool when needed. args_line format: " # spec.argsHint # ". Rule: " # spec.rule;
-      let argsDesc = "Pipe-separated arguments in order: " # spec.argsHint;
       defs.add(
         "{\"type\":\"function\",\"function\":{" #
         "\"name\":\"" # Json.escape(spec.name) # "\"," #
-        "\"description\":\"" # Json.escape(description) # "\"," #
-        "\"parameters\":{" #
-        "\"type\":\"object\"," #
-        "\"properties\":{\"args_line\":{\"type\":\"string\",\"description\":\"" # Json.escape(argsDesc) # "\"}}," #
-        "\"required\":[\"args_line\"]," #
-        "\"additionalProperties\":false" #
-        "}" #
+        "\"description\":\"" # Json.escape(spec.description) # "\"," #
+        "\"parameters\":" # spec.parametersJson #
         "}}"
       );
     };
@@ -235,18 +246,10 @@ module {
 
     let defs = Buffer.Buffer<Text>(specs.size());
     for (spec in specs.vals()) {
-      let description =
-        "Use this tool when needed. args_line format: " # spec.argsHint # ". Rule: " # spec.rule;
-      let argsDesc = "Pipe-separated arguments in order: " # spec.argsHint;
       defs.add(
         "{\"name\":\"" # Json.escape(spec.name) # "\"," #
-        "\"description\":\"" # Json.escape(description) # "\"," #
-        "\"input_schema\":{" #
-        "\"type\":\"object\"," #
-        "\"properties\":{\"args_line\":{\"type\":\"string\",\"description\":\"" # Json.escape(argsDesc) # "\"}}," #
-        "\"required\":[\"args_line\"]," #
-        "\"additionalProperties\":false" #
-        "}" #
+        "\"description\":\"" # Json.escape(spec.description) # "\"," #
+        "\"input_schema\":" # spec.parametersJson #
         "}"
       );
     };
@@ -290,23 +293,32 @@ module {
 
     let defs = Buffer.Buffer<Text>(specs.size());
     for (spec in specs.vals()) {
-      let description =
-        "Use this tool when needed. args_line format: " # spec.argsHint # ". Rule: " # spec.rule;
-      let argsDesc = "Pipe-separated arguments in order: " # spec.argsHint;
       defs.add(
         "{\"name\":\"" # Json.escape(spec.name) # "\"," #
-        "\"description\":\"" # Json.escape(description) # "\"," #
-        "\"parameters\":{" #
-        "\"type\":\"object\"," #
-        "\"properties\":{\"args_line\":{\"type\":\"string\",\"description\":\"" # Json.escape(argsDesc) # "\"}}," #
-        "\"required\":[\"args_line\"]," #
-        "\"additionalProperties\":false" #
-        "}" #
+        "\"description\":\"" # Json.escape(spec.description) # "\"," #
+        "\"parameters\":" # sanitizeGoogleParametersJson(spec.parametersJson) #
         "}"
       );
     };
 
     ",\"tools\":[{\"functionDeclarations\":[" # Text.join(",", defs.vals()) # "]}],\"toolConfig\":{\"functionCallingConfig\":{\"mode\":\"AUTO\"}}"
+  };
+
+  // Gemini functionDeclarations schema rejects `additionalProperties`.
+  // We keep richer schema for OpenAI/Anthropic and only strip unsupported keys for Google.
+  func sanitizeGoogleParametersJson(raw : Text) : Text {
+    var out = raw;
+    out := replaceAll(out, ",\"additionalProperties\":false", "");
+    out := replaceAll(out, ",\"additionalProperties\":true", "");
+    out := replaceAll(out, "\"additionalProperties\":false,", "");
+    out := replaceAll(out, "\"additionalProperties\":true,", "");
+    out := replaceAll(out, "\"additionalProperties\":false", "");
+    out := replaceAll(out, "\"additionalProperties\":true", "");
+    out
+  };
+
+  func replaceAll(text : Text, token : Text, value : Text) : Text {
+    Text.join(value, Text.split(text, #text token))
   };
 
   func normalizeGoogleModel(model : Text) : Text {

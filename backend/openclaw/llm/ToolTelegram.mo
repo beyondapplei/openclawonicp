@@ -7,8 +7,12 @@ import ToolTypes "./ToolTypes";
 module {
   public let spec : ToolTypes.ToolSpec = {
     name = "tg_send_message";
-    argsHint = "<chat_id>|<text>";
-    rule = "requires configured telegram bot token";
+    description = "Send a Telegram message via configured bot token.";
+    parametersJson = "{\"type\":\"object\",\"properties\":{\"chat_id\":{\"type\":\"integer\",\"minimum\":1},\"text\":{\"type\":\"string\"}},\"required\":[\"chat_id\",\"text\"],\"additionalProperties\":false}";
+    argNames = ["chat_id", "text"];
+    permission = #owner;
+    exposeToLlm = true;
+    exposeToApi = true;
   };
 
   func joinArgsFrom(args : [Text], start : Nat) : Text {

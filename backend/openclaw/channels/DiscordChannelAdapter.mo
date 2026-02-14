@@ -6,6 +6,8 @@ import Text "mo:base/Text";
 import TrieMap "mo:base/TrieMap";
 
 import ChannelRouter "./ChannelRouter";
+import ChannelDock "./ChannelDock";
+import Dispatch "../auto_reply/Dispatch";
 import Json "../http/Json";
 import Sessions "../core/Sessions";
 import Store "../core/Store";
@@ -33,7 +35,7 @@ module {
   };
 
   func isDiscordWebhook(req : InHttpRequest) : Bool {
-    req.method == "POST" and Text.startsWith(req.url, #text "/discord/webhook")
+    req.method == "POST" and Text.startsWith(req.url, #text(ChannelDock.discord.webhookPrefix))
   };
 
   public func queryHandler() : ChannelRouter.QueryHandler {
@@ -107,18 +109,18 @@ module {
               case (?o) o;
             };
 
-            let sessionId = "dc:" # incoming.channelId;
-            let sendRes = await Sessions.send(
-              deps.users,
-              deps.canisterPrincipal,
-              sessionId,
-              incoming.text,
-              opts,
-              deps.nowNs,
-              deps.modelCaller,
-              ?deps.toolCaller,
-              deps.toolSpecs,
-            );
+            let sessionId = ChannelDock.sessionIdFor(ChannelDock.discord, incoming.channelId);
+            let sendRes = await Dispatch.dispatchInboundMessage({
+              users = deps.users;
+              caller = deps.canisterPrincipal;
+              sessionId = sessionId;
+              message = incoming.text;
+              opts = opts;
+              nowNs = deps.nowNs;
+              modelCaller = deps.modelCaller;
+              toolCaller = ?deps.toolCaller;
+              toolSpecs = deps.toolSpecs;
+            });
 
             if (incoming.isInteraction) {
               let content = switch (sendRes) {

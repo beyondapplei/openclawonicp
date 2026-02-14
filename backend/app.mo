@@ -1,30 +1,38 @@
 import Nat "mo:base/Nat";
 import Nat64 "mo:base/Nat64";
 import Blob "mo:base/Blob";
+import Buffer "mo:base/Buffer";
 import Principal "mo:base/Principal";
-import Debug "mo:base/Debug";
 import Result "mo:base/Result";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
 
 import HttpTypes "./openclaw/http/HttpTypes";
 import ChannelRouter "./openclaw/channels/ChannelRouter";
-import DiscordChannelAdapter "./openclaw/channels/DiscordChannelAdapter";
-import TelegramChannelAdapter "./openclaw/channels/TelegramChannelAdapter";
 import Llm "./openclaw/llm/Llm";
 import Sessions "./openclaw/core/Sessions";
 import Hooks "./openclaw/core/Hooks";
-import Skills "./openclaw/core/Skills";
 import Store "./openclaw/core/Store";
-import Tools "./openclaw/core/Tools";
 import Telegram "./openclaw/telegram/Telegram";
 import Types "./openclaw/core/Types";
 import Wallet "./openclaw/wallet/Wallet";
 import WalletIcp "./openclaw/wallet/WalletIcp";
 import WalletEvm "./openclaw/wallet/WalletEvm";
+import RpcConfig "./openclaw/wallet/RpcConfig";
+import TokenConfig "./openclaw/wallet/TokenConfig";
 import CkEthTrade "./openclaw/wallet/CkEthTrade";
+import PolymarketResearch "./openclaw/polymarket/PolymarketResearch";
 import KeyVault "./openclaw/core/KeyVault";
-import LlmToolRouter "./openclaw/llm/LlmToolRouter";
+import HooksMethods "./openclaw/gateway/server-methods/HooksMethods";
+import AdminMethods "./openclaw/gateway/server-methods/AdminMethods";
+import ModelsMethods "./openclaw/gateway/server-methods/ModelsMethods";
+import SessionsMethods "./openclaw/gateway/server-methods/SessionsMethods";
+import SkillsMethods "./openclaw/gateway/server-methods/SkillsMethods";
+import ToolsMethods "./openclaw/gateway/server-methods/ToolsMethods";
+import WalletMethods "./openclaw/gateway/server-methods/WalletMethods";
+import ChannelsMethods "./openclaw/gateway/server-methods/ChannelsMethods";
+import AuthContext "./openclaw/gateway/context/AuthContext";
+import GatewayRuntime "./openclaw/gateway/runtime/GatewayRuntime";
 import Migration "migration";
 
 persistent actor OpenClawOnICP {
@@ -41,6 +49,16 @@ persistent actor OpenClawOnICP {
   public type SendResult = Types.SendResult;
   public type ToolResult = Types.ToolResult;
   public type HookEntry = Hooks.HookEntry;
+  public type LlmTrace = {
+    id : Nat;
+    tsNs : Int;
+    provider : Text;
+    model : Text;
+    url : Text;
+    requestBody : Text;
+    responseBody : ?Text;
+    error : ?Text;
+  };
 
   public type ModelsResult = Result.Result<[Text], Text>;
   public type SendIcpResult = Result.Result<Nat, Text>;
@@ -115,22 +133,24 @@ persistent actor OpenClawOnICP {
   var ckethKongswapBrokerCanisterText : ?Text = null;
   var llmApiKeysEnc : [(Text, Text)] = [];
   var migrationState : ?Migration.State = null;
+  transient let maxLlmTraceEntries : Nat = 200;
+  transient var nextLlmTraceId : Nat = 1;
+  transient var llmTraces = Buffer.Buffer<LlmTrace>(0);
+
+  func assertAuthenticated(caller : Principal) {
+    AuthContext.assertAuthenticated(caller);
+  };
+
+  func isOwner(caller : Principal) : Bool {
+    AuthContext.isOwner(owner, caller)
+  };
 
   func assertOwner(caller : Principal) {
-    if (Principal.isAnonymous(caller)) {
-      Debug.trap("login required")
-    };
-    switch (owner) {
-      case null { owner := ?caller };
-      case (?o) { if (o != caller) { Debug.trap("not authorized") } };
-    }
+    owner := AuthContext.assertOwner(owner, caller);
   };
 
   func assertOwnerQuery(caller : Principal) {
-    switch (owner) {
-      case null { Debug.trap("not authorized") };
-      case (?o) { if (o != caller) { Debug.trap("not authorized") } };
-    }
+    AuthContext.assertOwnerQuery(owner, caller);
   };
 
   public query func owner_get() : async ?Principal {
@@ -138,166 +158,498 @@ persistent actor OpenClawOnICP {
   };
 
   public shared ({ caller }) func admin_set_tg(botToken : Text, secretToken : ?Text) : async () {
-    assertOwner(caller);
-    tgBotToken := ?Text.trim(botToken, #char ' ');
-    tgSecretToken := secretToken;
+    AdminMethods.setTg(
+      assertOwner,
+      caller,
+      botToken,
+      secretToken,
+      func(nextBotToken : ?Text, nextSecretToken : ?Text) {
+        tgBotToken := nextBotToken;
+        tgSecretToken := nextSecretToken;
+      },
+    );
   };
 
   public shared ({ caller }) func admin_set_llm_opts(opts : SendOptions) : async () {
-    assertOwner(caller);
-    tgLlmOpts := ?opts;
+    AdminMethods.setLlmOpts(
+      assertOwner,
+      caller,
+      opts,
+      func(nextOpts : ?SendOptions) {
+        tgLlmOpts := nextOpts;
+      },
+    );
   };
 
   public shared ({ caller }) func admin_set_discord(proxySecret : ?Text) : async () {
-    assertOwner(caller);
-    discordProxySecret := switch (proxySecret) {
-      case null null;
-      case (?s) {
-        let t = Text.trim(s, #char ' ');
-        if (Text.size(t) == 0) null else ?t;
-      };
-    };
+    AdminMethods.setDiscord(
+      assertOwner,
+      caller,
+      proxySecret,
+      func(nextProxySecret : ?Text) {
+        discordProxySecret := nextProxySecret;
+      },
+    );
   };
 
   public shared ({ caller }) func admin_set_cketh_broker(canisterText : ?Text) : async () {
-    assertOwner(caller);
-    ckethIcpswapBrokerCanisterText := normalizeOptText(canisterText);
+    AdminMethods.setCkethBroker(
+      assertOwner,
+      caller,
+      canisterText,
+      func(nextBroker : ?Text) {
+        ckethIcpswapBrokerCanisterText := nextBroker;
+      },
+    );
   };
 
   public shared ({ caller }) func admin_set_cketh_brokers(icpswapCanisterText : ?Text, kongswapCanisterText : ?Text) : async () {
-    assertOwner(caller);
-    ckethIcpswapBrokerCanisterText := normalizeOptText(icpswapCanisterText);
-    ckethKongswapBrokerCanisterText := normalizeOptText(kongswapCanisterText);
+    AdminMethods.setCkethBrokers(
+      assertOwner,
+      caller,
+      icpswapCanisterText,
+      kongswapCanisterText,
+      func(nextIcpswapBroker : ?Text, nextKongswapBroker : ?Text) {
+        ckethIcpswapBrokerCanisterText := nextIcpswapBroker;
+        ckethKongswapBrokerCanisterText := nextKongswapBroker;
+      },
+    );
   };
 
   public shared ({ caller }) func admin_set_cketh_quote_sources(icpswapQuoteUrl : ?Text, kongswapQuoteUrl : ?Text) : async () {
-    assertOwner(caller);
-    ckethIcpswapQuoteUrl := normalizeOptText(icpswapQuoteUrl);
-    ckethKongswapQuoteUrl := normalizeOptText(kongswapQuoteUrl);
+    AdminMethods.setCkethQuoteSources(
+      assertOwner,
+      caller,
+      icpswapQuoteUrl,
+      kongswapQuoteUrl,
+      func(nextIcpswapQuoteUrl : ?Text, nextKongswapQuoteUrl : ?Text) {
+        ckethIcpswapQuoteUrl := nextIcpswapQuoteUrl;
+        ckethKongswapQuoteUrl := nextKongswapQuoteUrl;
+      },
+    );
   };
 
   public shared ({ caller }) func admin_set_provider_api_key(provider : Provider, apiKey : Text) : async () {
-    assertOwner(caller);
-    llmApiKeysEnc := KeyVault.setProviderApiKey(llmApiKeysEnc, provider, apiKey);
+    AdminMethods.setProviderApiKey(
+      assertOwner,
+      caller,
+      provider,
+      apiKey,
+      func(p : Provider, k : Text) {
+        llmApiKeysEnc := KeyVault.setProviderApiKey(llmApiKeysEnc, p, k);
+      },
+    );
   };
 
   public shared query ({ caller }) func admin_has_provider_api_key(provider : Provider) : async Bool {
-    assertOwnerQuery(caller);
-    KeyVault.hasProviderApiKey(llmApiKeysEnc, provider)
+    AdminMethods.hasProviderApiKey(
+      assertOwnerQuery,
+      caller,
+      provider,
+      func(p : Provider) : Bool {
+        KeyVault.hasProviderApiKey(llmApiKeysEnc, p)
+      },
+    )
   };
 
   func resolveApiKey(provider : Provider, providedApiKey : Text) : Result.Result<Text, Text> {
     KeyVault.resolveApiKey(llmApiKeysEnc, provider, providedApiKey)
   };
 
-  func normalizeOptText(v : ?Text) : ?Text {
-    switch (v) {
-      case null null;
-      case (?s) {
-        let t = Text.trim(s, #char ' ');
-        if (Text.size(t) == 0) null else ?t;
+  func resolveApiKeyForCaller(caller : Principal, provider : Provider, providedApiKey : Text) : Result.Result<Text, Text> {
+    AuthContext.resolveApiKeyForCaller(owner, caller, provider, providedApiKey, resolveApiKey)
+  };
+
+  func selfPrincipal() : Principal {
+    Principal.fromActor(OpenClawOnICP)
+  };
+
+  func providerText(provider : Provider) : Text {
+    switch (provider) {
+      case (#openai) "openai";
+      case (#anthropic) "anthropic";
+      case (#google) "google";
+    }
+  };
+
+  func providerUrl(provider : Provider, model : Text) : Text {
+    switch (provider) {
+      case (#openai) "https://api.openai.com/v1/chat/completions";
+      case (#anthropic) "https://api.anthropic.com/v1/messages";
+      case (#google) "https://generativelanguage.googleapis.com/v1beta/models/" # model # ":generateContent";
+    }
+  };
+
+  func appendLlmTrace(provider : Provider, model : Text, requestBody : Text, res : Result.Result<Text, Text>) {
+    let id = nextLlmTraceId;
+    nextLlmTraceId += 1;
+    let trace : LlmTrace = switch (res) {
+      case (#ok(raw)) {
+        {
+          id;
+          tsNs = nowNs();
+          provider = providerText(provider);
+          model;
+          url = providerUrl(provider, model);
+          requestBody;
+          responseBody = ?raw;
+          error = null;
+        }
+      };
+      case (#err(e)) {
+        {
+          id;
+          tsNs = nowNs();
+          provider = providerText(provider);
+          model;
+          url = providerUrl(provider, model);
+          requestBody;
+          responseBody = null;
+          error = ?e;
+        }
+      };
+    };
+    if (llmTraces.size() >= maxLlmTraceEntries) {
+      ignore llmTraces.remove(0);
+    };
+    llmTraces.add(trace);
+  };
+
+  func sessionsMethodsDeps() : SessionsMethods.Deps {
+    {
+      users = users;
+      nowNs = nowNs;
+      assertAuthenticated = assertAuthenticated;
+      assertOwnerQuery = assertOwnerQuery;
+      isOwner = isOwner;
+      resolveApiKeyForCaller = resolveApiKeyForCaller;
+      modelCaller = func(
+        provider : Provider,
+        model : Text,
+        apiKey : Text,
+        sysPrompt : Text,
+        history : [ChatMessage],
+        toolSpecs : [Sessions.ToolSpec],
+        maxTokens : ?Nat,
+        temperature : ?Float,
+      ) : async Result.Result<Text, Text> {
+        await GatewayRuntime.modelCaller(runtimeDeps(), provider, model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature)
+      };
+      llmToolSpecsFor = func(sessionId : Text, includeOwnerTools : Bool) : [Sessions.ToolSpec] {
+        GatewayRuntime.llmToolSpecsFor(sessionId, includeOwnerTools)
+      };
+      llmToolCallerFor = func(callerPrincipal : Principal, sessionId : Text, includeOwnerTools : Bool) : Sessions.ToolCaller {
+        GatewayRuntime.llmToolCallerFor(runtimeDeps(), callerPrincipal, sessionId, includeOwnerTools)
+      };
+    }
+  };
+
+  func modelsMethodsDeps() : ModelsMethods.Deps {
+    {
+      ic = ic;
+      transformFn = http_transform;
+      defaultHttpCycles = defaultHttpCycles;
+      assertAuthenticated = assertAuthenticated;
+      resolveApiKeyForCaller = resolveApiKeyForCaller;
+    }
+  };
+
+  func skillsMethodsDeps() : SkillsMethods.Deps {
+    {
+      users = users;
+      nowNs = nowNs;
+      assertAuthenticated = assertAuthenticated;
+    }
+  };
+
+  func hooksMethodsDeps() : HooksMethods.Deps {
+    {
+      users = users;
+      assertAuthenticated = assertAuthenticated;
+    }
+  };
+
+  func toolsMethodsDeps() : ToolsMethods.Deps {
+    {
+      assertAuthenticated = assertAuthenticated;
+      isOwner = isOwner;
+      apiToolCallerFor = func(callerPrincipal : Principal, includeOwnerTools : Bool) : Sessions.ToolCaller {
+        GatewayRuntime.apiToolCallerFor(runtimeDeps(), callerPrincipal, includeOwnerTools)
+      };
+    }
+  };
+
+  func channelsMethodsDeps() : ChannelsMethods.Deps {
+    {
+      tgLlmOpts = tgLlmOpts;
+      resolveApiKey = resolveApiKey;
+      llmToolCallerFor = func(callerPrincipal : Principal, sessionId : Text, includeOwnerTools : Bool) : Sessions.ToolCaller {
+        GatewayRuntime.llmToolCallerFor(runtimeDeps(), callerPrincipal, sessionId, includeOwnerTools)
+      };
+      llmToolSpecsFor = func(sessionId : Text, includeOwnerTools : Bool) : [Sessions.ToolSpec] {
+        GatewayRuntime.llmToolSpecsFor(sessionId, includeOwnerTools)
+      };
+      users = users;
+      canisterPrincipal = selfPrincipal();
+      nowNs = nowNs;
+      modelCaller = func(
+        provider : Provider,
+        model : Text,
+        apiKey : Text,
+        sysPrompt : Text,
+        history : [ChatMessage],
+        toolSpecs : [Sessions.ToolSpec],
+        maxTokens : ?Nat,
+        temperature : ?Float,
+      ) : async Result.Result<Text, Text> {
+        await GatewayRuntime.modelCaller(runtimeDeps(), provider, model, apiKey, sysPrompt, history, toolSpecs, maxTokens, temperature)
+      };
+      tgBotToken = tgBotToken;
+      tgSecretToken = tgSecretToken;
+      discordProxySecret = discordProxySecret;
+      ic = ic;
+      transformFn = http_transform;
+      defaultHttpCycles = defaultHttpCycles;
+    }
+  };
+
+  func runtimeDeps() : GatewayRuntime.Deps {
+    {
+      users = users;
+      nowNs = nowNs;
+      callModel = func(
+        provider : Provider,
+        model : Text,
+        apiKey : Text,
+        sysPrompt : Text,
+        history : [ChatMessage],
+        toolSpecs : [Sessions.ToolSpec],
+        maxTokens : ?Nat,
+        temperature : ?Float,
+      ) : async Result.Result<Text, Text> {
+        let preview = Llm.previewRequest(
+          provider,
+          model,
+          apiKey,
+          sysPrompt,
+          history,
+          toolSpecs,
+          maxTokens,
+          temperature,
+        );
+        let res = await Llm.callModel(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          provider,
+          model,
+          apiKey,
+          sysPrompt,
+          history,
+          toolSpecs,
+          maxTokens,
+          temperature,
+        );
+        appendLlmTrace(provider, model, preview.body, res);
+        res
+      };
+      sendIcp = func(toPrincipalText : Text, amountE8s : Nat64) : async Result.Result<Nat, Text> {
+        await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toPrincipalText, amountE8s)
+      };
+      sendEth = func(network : Text, toAddress : Text, amountWei : Nat) : async Result.Result<Text, Text> {
+        await WalletEvm.send(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          selfPrincipal(),
+          selfPrincipal(),
+          network,
+          effectiveRpcUrl(network, null),
+          toAddress,
+          amountWei,
+        )
+      };
+      sendErc20 = func(
+        network : Text,
+        tokenAddress : Text,
+        toAddress : Text,
+        amount : Nat,
+      ) : async Result.Result<Text, Text> {
+        await WalletEvm.sendErc20(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          selfPrincipal(),
+          selfPrincipal(),
+          network,
+          effectiveRpcUrl(network, null),
+          tokenAddress,
+          toAddress,
+          amount,
+        )
+      };
+      buyErc20Uniswap = func(
+        network : Text,
+        routerAddress : Text,
+        tokenInAddress : Text,
+        tokenOutAddress : Text,
+        fee : Nat,
+        amountIn : Nat,
+        amountOutMinimum : Nat,
+        deadline : Nat,
+        sqrtPriceLimitX96 : Nat,
+      ) : async Result.Result<Text, Text> {
+        await WalletEvm.buyErc20Uniswap(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          selfPrincipal(),
+          selfPrincipal(),
+          network,
+          effectiveRpcUrl(network, null),
+          routerAddress,
+          tokenInAddress,
+          tokenOutAddress,
+          fee,
+          amountIn,
+          amountOutMinimum,
+          deadline,
+          sqrtPriceLimitX96,
+        )
+      };
+      swapErc20Uniswap = func(
+        network : Text,
+        routerAddress : Text,
+        tokenInAddress : Text,
+        tokenOutAddress : Text,
+        fee : Nat,
+        amountIn : Nat,
+        amountOutMinimum : Nat,
+        deadline : Nat,
+        sqrtPriceLimitX96 : Nat,
+        autoApprove : Bool,
+      ) : async Result.Result<Text, Text> {
+        await WalletEvm.swapErc20Uniswap(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          selfPrincipal(),
+          selfPrincipal(),
+          network,
+          effectiveRpcUrl(network, null),
+          routerAddress,
+          tokenInAddress,
+          tokenOutAddress,
+          fee,
+          amountIn,
+          amountOutMinimum,
+          deadline,
+          sqrtPriceLimitX96,
+          autoApprove,
+        )
+      };
+      buyUni = func(
+        network : Text,
+        amountUniBase : Nat,
+        slippageBps : Nat,
+        deadline : Nat,
+      ) : async Result.Result<Text, Text> {
+        await WalletEvm.buyUniAuto(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          selfPrincipal(),
+          selfPrincipal(),
+          network,
+          effectiveRpcUrl(network, null),
+          amountUniBase,
+          slippageBps,
+          deadline,
+        )
+      };
+      polymarketResearch = func(
+        topic : Text,
+        marketLimit : Nat,
+        newsLimit : Nat,
+      ) : async Result.Result<Text, Text> {
+        await PolymarketResearch.research(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          topic,
+          marketLimit,
+          newsLimit,
+        )
+      };
+      sendTg = func(chatId : Nat, messageText : Text) : async Result.Result<(), Text> {
+        let token = switch (tgBotToken) {
+          case null return #err("telegram bot token not configured");
+          case (?t) t;
+        };
+        await Telegram.sendMessage(ic, http_transform, defaultHttpCycles, token, chatId, messageText)
+      };
+      buyCkEth = func(amountCkEthText : Text, maxIcpE8s : Nat64) : async Result.Result<Text, Text> {
+        await CkEthTrade.buyBest(ckethVenueConfig(), amountCkEthText, maxIcpE8s)
       };
     }
   };
 
   public shared ({ caller }) func admin_tg_set_webhook(webhookUrl : Text) : async Result.Result<Text, Text> {
-    assertOwner(caller);
-    switch (tgBotToken) {
-      case null return #err("telegram bot token not configured");
-      case (?token) {
-        await Telegram.setWebhook(ic, http_transform, defaultHttpCycles, token, webhookUrl, tgSecretToken)
-      };
-    }
+    await AdminMethods.tgSetWebhook(
+      assertOwner,
+      caller,
+      webhookUrl,
+      func() : ?Text { tgBotToken },
+      func() : ?Text { tgSecretToken },
+      func(token : Text, url : Text, secret : ?Text) : async Result.Result<Text, Text> {
+        await Telegram.setWebhook(ic, http_transform, defaultHttpCycles, token, url, secret)
+      },
+    )
   };
 
   public shared ({ caller }) func tg_status() : async TgStatus {
-    assertOwner(caller);
-    {
-      configured = (tgBotToken != null);
-      hasSecret = (tgSecretToken != null);
-      hasLlmConfig = (tgLlmOpts != null);
-    }
+    AdminMethods.tgStatus(
+      assertOwner,
+      caller,
+      func() : ?Text { tgBotToken },
+      func() : ?Text { tgSecretToken },
+      func() : ?SendOptions { tgLlmOpts },
+    )
   };
 
   public shared ({ caller }) func discord_status() : async DiscordStatus {
-    assertOwner(caller);
-    {
-      configured = (discordProxySecret != null);
-      hasProxySecret = (discordProxySecret != null);
-      hasLlmConfig = (tgLlmOpts != null);
-    }
+    AdminMethods.discordStatus(
+      assertOwner,
+      caller,
+      func() : ?Text { discordProxySecret },
+      func() : ?SendOptions { tgLlmOpts },
+    )
   };
 
   public shared ({ caller }) func cketh_status() : async CkEthStatus {
-    assertOwner(caller);
-    {
-      hasIcpswapQuoteUrl = (ckethIcpswapQuoteUrl != null);
-      hasKongswapQuoteUrl = (ckethKongswapQuoteUrl != null);
-      hasIcpswapBroker = (ckethIcpswapBrokerCanisterText != null);
-      hasKongswapBroker = (ckethKongswapBrokerCanisterText != null);
-    }
+    AdminMethods.ckethStatus(
+      assertOwner,
+      caller,
+      func() : ?Text { ckethIcpswapQuoteUrl },
+      func() : ?Text { ckethKongswapQuoteUrl },
+      func() : ?Text { ckethIcpswapBrokerCanisterText },
+      func() : ?Text { ckethKongswapBrokerCanisterText },
+    )
   };
 
   // Canister HTTP entrypoint (query): upgrade Telegram webhooks to update.
   public query func http_request(req : InHttpRequest) : async InHttpResponse {
-    ChannelRouter.routeQuery(req, [
-      TelegramChannelAdapter.queryHandler(),
-      DiscordChannelAdapter.queryHandler(),
-    ])
+    ChannelsMethods.routeQuery(req)
   };
 
   // Canister HTTP update handler: process Telegram webhook.
   public shared ({ caller = _ }) func http_request_update(req : InHttpRequest) : async InHttpResponse {
-    let tgOptsResolved : ?SendOptions = switch (tgLlmOpts) {
-      case null null;
-      case (?opts) {
-        switch (resolveApiKey(opts.provider, opts.apiKey)) {
-          case (#err(_)) null;
-          case (#ok(k)) {
-            ?{
-              provider = opts.provider;
-              model = opts.model;
-              apiKey = k;
-              systemPrompt = opts.systemPrompt;
-              maxTokens = opts.maxTokens;
-              temperature = opts.temperature;
-              skillNames = opts.skillNames;
-              includeHistory = opts.includeHistory;
-            }
-          };
-        }
-      };
-    };
-
-    await ChannelRouter.routeUpdate(
-      req,
-      [
-        TelegramChannelAdapter.updateHandler({
-          tgBotToken = tgBotToken;
-          tgSecretToken = tgSecretToken;
-          tgLlmOpts = tgOptsResolved;
-          users = users;
-          canisterPrincipal = Principal.fromActor(OpenClawOnICP);
-          nowNs = nowNs;
-          modelCaller = modelCaller;
-          toolCaller = toolCaller;
-          toolSpecs = llmToolSpecs;
-          ic = ic;
-          transformFn = http_transform;
-          defaultHttpCycles = defaultHttpCycles;
-        }),
-        DiscordChannelAdapter.updateHandler({
-          llmOpts = tgOptsResolved;
-          proxySecret = discordProxySecret;
-          users = users;
-          canisterPrincipal = Principal.fromActor(OpenClawOnICP);
-          nowNs = nowNs;
-          modelCaller = modelCaller;
-          toolCaller = toolCaller;
-          toolSpecs = llmToolSpecs;
-        }),
-      ],
-    )
+    await ChannelsMethods.routeUpdate(req, channelsMethodsDeps())
   };
 
   // -----------------------------
@@ -349,6 +701,10 @@ persistent actor OpenClawOnICP {
 
   func nowNs() : Int { Time.now() };
 
+  func effectiveRpcUrl(network : Text, rpcUrl : ?Text) : ?Text {
+    RpcConfig.effectiveRpcUrl(network, rpcUrl)
+  };
+
   func ckethVenueConfig() : CkEthTrade.VenueConfig {
     {
       ic = ic;
@@ -362,131 +718,412 @@ persistent actor OpenClawOnICP {
   };
 
   public shared ({ caller }) func whoami() : async Text {
-    assertOwner(caller);
-    Principal.toText(caller)
+    AdminMethods.whoami(assertOwner, caller)
   };
 
   public shared ({ caller }) func ecdsa_public_key(derivationPath : [Blob], keyName : ?Text) : async EcdsaPublicKeyResult {
-    assertOwner(caller);
-    await WalletEvm.ecdsaPublicKey(ic00, caller, Principal.fromActor(OpenClawOnICP), derivationPath, keyName)
+    await WalletMethods.ecdsaPublicKey(
+      assertOwner,
+      caller,
+      derivationPath,
+      keyName,
+      func(dp : [Blob], kn : ?Text) : async EcdsaPublicKeyResult {
+        await WalletEvm.ecdsaPublicKey(ic00, caller, selfPrincipal(), dp, kn)
+      },
+    )
   };
 
   public shared ({ caller }) func sign_with_ecdsa(messageHash : Blob, derivationPath : [Blob], keyName : ?Text) : async SignWithEcdsaResult {
-    assertOwner(caller);
-    await WalletEvm.signWithEcdsa(ic00, caller, messageHash, derivationPath, keyName)
+    await WalletMethods.signWithEcdsa(
+      assertOwner,
+      caller,
+      messageHash,
+      derivationPath,
+      keyName,
+      func(mh : Blob, dp : [Blob], kn : ?Text) : async SignWithEcdsaResult {
+        await WalletEvm.signWithEcdsa(ic00, caller, mh, dp, kn)
+      },
+    )
   };
 
   public shared ({ caller }) func agent_wallet() : async WalletResult {
-    assertOwner(caller);
-    await WalletEvm.agentWallet(ic00, caller, Principal.fromActor(OpenClawOnICP))
+    await WalletMethods.agentWallet(
+      assertOwner,
+      caller,
+      func() : async WalletResult {
+        await WalletEvm.agentWallet(ic00, caller, selfPrincipal())
+      },
+    )
   };
 
   public shared query ({ caller }) func canister_principal() : async Principal {
-    assertOwnerQuery(caller);
-    Principal.fromActor(OpenClawOnICP)
+    WalletMethods.canisterPrincipal(assertOwnerQuery, caller, selfPrincipal())
   };
 
   public shared ({ caller }) func wallet_send_icp(toPrincipalText : Text, amountE8s : Nat64) : async SendIcpResult {
-    assertOwner(caller);
-    await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toPrincipalText, amountE8s)
+    await WalletMethods.sendIcp(
+      assertOwner,
+      caller,
+      toPrincipalText,
+      amountE8s,
+      func(toText : Text, amount : Nat64) : async SendIcpResult {
+        await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toText, amount)
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_send_icrc1(ledgerPrincipalText : Text, toPrincipalText : Text, amount : Nat, fee : ?Nat) : async SendIcrc1Result {
-    assertOwner(caller);
-    await WalletIcp.sendIcrc1(ledgerPrincipalText, toPrincipalText, amount, fee)
+    await WalletMethods.sendIcrc1(
+      assertOwner,
+      caller,
+      ledgerPrincipalText,
+      toPrincipalText,
+      amount,
+      fee,
+      func(lp : Text, toText : Text, amt : Nat, maybeFee : ?Nat) : async SendIcrc1Result {
+        await WalletIcp.sendIcrc1(lp, toText, amt, maybeFee)
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_balance_icp() : async BalanceResult {
-    assertOwner(caller);
-    await WalletIcp.balanceIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, Principal.fromActor(OpenClawOnICP))
+    await WalletMethods.balanceIcp(
+      assertOwner,
+      caller,
+      func() : async BalanceResult {
+        await WalletIcp.balanceIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, selfPrincipal())
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_balance_icrc1(ledgerPrincipalText : Text) : async BalanceResult {
-    assertOwner(caller);
-    await WalletIcp.balanceIcrc1(ledgerPrincipalText, Principal.fromActor(OpenClawOnICP))
+    await WalletMethods.balanceIcrc1(
+      assertOwner,
+      caller,
+      ledgerPrincipalText,
+      func(lp : Text) : async BalanceResult {
+        await WalletIcp.balanceIcrc1(lp, selfPrincipal())
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_send_eth_raw(network : Text, rpcUrl : ?Text, rawTxHex : Text) : async SendEthResult {
-    assertOwner(caller);
-    await WalletEvm.sendRaw(ic, http_transform, defaultHttpCycles, network, rpcUrl, rawTxHex)
+    await WalletMethods.sendEthRaw(
+      assertOwner,
+      caller,
+      network,
+      rpcUrl,
+      rawTxHex,
+      func(net : Text, url : ?Text, raw : Text) : async SendEthResult {
+        await WalletEvm.sendRaw(ic, http_transform, defaultHttpCycles, net, effectiveRpcUrl(net, url), raw)
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_eth_address() : async EthAddressResult {
-    assertOwner(caller);
-    await WalletEvm.ethAddress(ic00, caller, Principal.fromActor(OpenClawOnICP))
+    await WalletMethods.ethAddress(
+      assertOwner,
+      caller,
+      func() : async EthAddressResult {
+        await WalletEvm.ethAddress(ic00, caller, selfPrincipal())
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_send_eth(network : Text, rpcUrl : ?Text, toAddress : Text, amountWei : Nat) : async SendEthResult {
-    assertOwner(caller);
-    await WalletEvm.send(
-      ic,
-      http_transform,
-      defaultHttpCycles,
-      ic00,
+    await WalletMethods.sendEth(
+      assertOwner,
       caller,
-      Principal.fromActor(OpenClawOnICP),
       network,
       rpcUrl,
       toAddress,
       amountWei,
+      func(net : Text, url : ?Text, to : Text, amount : Nat) : async SendEthResult {
+        await WalletEvm.send(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          caller,
+          selfPrincipal(),
+          net,
+          effectiveRpcUrl(net, url),
+          to,
+          amount,
+        )
+      },
     )
   };
 
   public shared ({ caller }) func wallet_send_erc20(network : Text, rpcUrl : ?Text, tokenAddress : Text, toAddress : Text, amount : Nat) : async SendEthResult {
-    assertOwner(caller);
-    await WalletEvm.sendErc20(
-      ic,
-      http_transform,
-      defaultHttpCycles,
-      ic00,
+    await WalletMethods.sendErc20(
+      assertOwner,
       caller,
-      Principal.fromActor(OpenClawOnICP),
       network,
       rpcUrl,
       tokenAddress,
       toAddress,
       amount,
+      func(net : Text, url : ?Text, token : Text, to : Text, amt : Nat) : async SendEthResult {
+        await WalletEvm.sendErc20(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          caller,
+          selfPrincipal(),
+          net,
+          effectiveRpcUrl(net, url),
+          token,
+          to,
+          amt,
+        )
+      },
+    )
+  };
+
+  public shared ({ caller }) func wallet_buy_erc20_uniswap(
+    network : Text,
+    rpcUrl : ?Text,
+    routerAddress : Text,
+    tokenInAddress : Text,
+    tokenOutAddress : Text,
+    fee : Nat,
+    amountIn : Nat,
+    amountOutMinimum : Nat,
+    deadline : Nat,
+    sqrtPriceLimitX96 : Nat,
+  ) : async SendEthResult {
+    await WalletMethods.buyErc20Uniswap(
+      assertOwner,
+      caller,
+      network,
+      rpcUrl,
+      routerAddress,
+      tokenInAddress,
+      tokenOutAddress,
+      fee,
+      amountIn,
+      amountOutMinimum,
+      deadline,
+      sqrtPriceLimitX96,
+      func(
+        net : Text,
+        url : ?Text,
+        router : Text,
+        tokenIn : Text,
+        tokenOut : Text,
+        poolFee : Nat,
+        amountInBase : Nat,
+        amountOutMinBase : Nat,
+        deadlineSec : Nat,
+        sqrtLimit : Nat,
+      ) : async SendEthResult {
+        await WalletEvm.buyErc20Uniswap(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          caller,
+          selfPrincipal(),
+          net,
+          effectiveRpcUrl(net, url),
+          router,
+          tokenIn,
+          tokenOut,
+          poolFee,
+          amountInBase,
+          amountOutMinBase,
+          deadlineSec,
+          sqrtLimit,
+        )
+      },
+    )
+  };
+
+  public shared ({ caller }) func wallet_swap_uniswap(
+    network : Text,
+    rpcUrl : ?Text,
+    routerAddress : Text,
+    tokenInAddress : Text,
+    tokenOutAddress : Text,
+    fee : Nat,
+    amountIn : Nat,
+    amountOutMinimum : Nat,
+    deadline : Nat,
+    sqrtPriceLimitX96 : Nat,
+    autoApprove : Bool,
+  ) : async SendEthResult {
+    await WalletMethods.swapErc20Uniswap(
+      assertOwner,
+      caller,
+      network,
+      rpcUrl,
+      routerAddress,
+      tokenInAddress,
+      tokenOutAddress,
+      fee,
+      amountIn,
+      amountOutMinimum,
+      deadline,
+      sqrtPriceLimitX96,
+      autoApprove,
+      func(
+        net : Text,
+        url : ?Text,
+        router : Text,
+        tokenIn : Text,
+        tokenOut : Text,
+        poolFee : Nat,
+        amountInBase : Nat,
+        amountOutMinBase : Nat,
+        deadlineSec : Nat,
+        sqrtLimit : Nat,
+        doAutoApprove : Bool,
+      ) : async SendEthResult {
+        await WalletEvm.swapErc20Uniswap(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          caller,
+          selfPrincipal(),
+          net,
+          effectiveRpcUrl(net, url),
+          router,
+          tokenIn,
+          tokenOut,
+          poolFee,
+          amountInBase,
+          amountOutMinBase,
+          deadlineSec,
+          sqrtLimit,
+          doAutoApprove,
+        )
+      },
+    )
+  };
+
+  public shared ({ caller }) func wallet_buy_uni(
+    network : Text,
+    rpcUrl : ?Text,
+    amountUniBase : Nat,
+    slippageBps : Nat,
+    deadline : Nat,
+  ) : async SendEthResult {
+    await WalletMethods.buyUniAuto(
+      assertOwner,
+      caller,
+      network,
+      rpcUrl,
+      amountUniBase,
+      slippageBps,
+      deadline,
+      func(
+        net : Text,
+        url : ?Text,
+        amountUni : Nat,
+        slippage : Nat,
+        deadlineSec : Nat,
+      ) : async SendEthResult {
+        await WalletEvm.buyUniAuto(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          caller,
+          selfPrincipal(),
+          net,
+          effectiveRpcUrl(net, url),
+          amountUni,
+          slippage,
+          deadlineSec,
+        )
+      },
+    )
+  };
+
+  public shared query ({ caller }) func wallet_token_address(network : Text, symbol : Text) : async ?Text {
+    assertOwnerQuery(caller);
+    TokenConfig.tokenAddress(network, symbol)
+  };
+
+  public shared ({ caller }) func polymarket_research(topic : Text, marketLimit : Nat, newsLimit : Nat) : async Result.Result<Text, Text> {
+    assertOwner(caller);
+    await PolymarketResearch.research(
+      ic,
+      http_transform,
+      defaultHttpCycles,
+      topic,
+      marketLimit,
+      newsLimit,
     )
   };
 
   public shared ({ caller }) func wallet_buy_cketh_one(maxIcpE8s : Nat64) : async BuyCkEthResult {
-    assertOwner(caller);
-    if (maxIcpE8s == 0) return #err("maxIcpE8s must be > 0");
-    await CkEthTrade.buyOne(ckethVenueConfig(), maxIcpE8s)
+    await WalletMethods.buyCkEthOne(
+      assertOwner,
+      caller,
+      maxIcpE8s,
+      func(maxIcp : Nat64) : async BuyCkEthResult {
+        await CkEthTrade.buyOne(ckethVenueConfig(), maxIcp)
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_buy_cketh(amountCkEthText : Text, maxIcpE8s : Nat64) : async BuyCkEthResult {
-    assertOwner(caller);
-    if (maxIcpE8s == 0) return #err("maxIcpE8s must be > 0");
-    await CkEthTrade.buyBest(ckethVenueConfig(), amountCkEthText, maxIcpE8s)
+    await WalletMethods.buyCkEth(
+      assertOwner,
+      caller,
+      amountCkEthText,
+      maxIcpE8s,
+      func(amountText : Text, maxIcp : Nat64) : async BuyCkEthResult {
+        await CkEthTrade.buyBest(ckethVenueConfig(), amountText, maxIcp)
+      },
+    )
   };
 
   public shared ({ caller }) func wallet_balance_eth(network : Text, rpcUrl : ?Text) : async BalanceResult {
-    assertOwner(caller);
-    await WalletEvm.balanceEth(
-      ic,
-      http_transform,
-      defaultHttpCycles,
-      ic00,
+    await WalletMethods.balanceEth(
+      assertOwner,
       caller,
-      Principal.fromActor(OpenClawOnICP),
       network,
       rpcUrl,
+      func(net : Text, url : ?Text) : async BalanceResult {
+        await WalletEvm.balanceEth(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          caller,
+          selfPrincipal(),
+          net,
+          effectiveRpcUrl(net, url),
+        )
+      },
     )
   };
 
   public shared ({ caller }) func wallet_balance_erc20(network : Text, rpcUrl : ?Text, tokenAddress : Text) : async BalanceResult {
-    assertOwner(caller);
-    await WalletEvm.balanceErc20(
-      ic,
-      http_transform,
-      defaultHttpCycles,
-      ic00,
+    await WalletMethods.balanceErc20(
+      assertOwner,
       caller,
-      Principal.fromActor(OpenClawOnICP),
       network,
       rpcUrl,
       tokenAddress,
+      func(net : Text, url : ?Text, token : Text) : async BalanceResult {
+        await WalletEvm.balanceErc20(
+          ic,
+          http_transform,
+          defaultHttpCycles,
+          ic00,
+          caller,
+          selfPrincipal(),
+          net,
+          effectiveRpcUrl(net, url),
+          token,
+        )
+      },
     )
   };
 
@@ -495,124 +1132,49 @@ persistent actor OpenClawOnICP {
   // -----------------------------
 
   public shared ({ caller }) func sessions_create(sessionId : Text) : async () {
-    assertOwner(caller);
-    Sessions.create(users, caller, sessionId, nowNs);
+    SessionsMethods.create(sessionsMethodsDeps(), caller, sessionId);
   };
 
   public shared ({ caller }) func sessions_reset(sessionId : Text) : async () {
-    assertOwner(caller);
-    Sessions.reset(users, caller, sessionId, nowNs);
+    SessionsMethods.reset(sessionsMethodsDeps(), caller, sessionId);
   };
 
   public shared query ({ caller }) func sessions_list_for(principal : Principal) : async [SessionSummary] {
-    assertOwnerQuery(caller);
-    switch (users.get(principal)) {
-      case null [];
-      case (?u) Sessions.list(u);
-    }
+    SessionsMethods.listFor(sessionsMethodsDeps(), caller, principal)
   };
 
   public shared ({ caller }) func sessions_list() : async [SessionSummary] {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Sessions.list(u)
+    SessionsMethods.list(sessionsMethodsDeps(), caller)
   };
 
   public shared ({ caller }) func sessions_history(sessionId : Text, limit : Nat) : async [ChatMessage] {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Sessions.history(u, sessionId, limit, nowNs)
+    SessionsMethods.history(sessionsMethodsDeps(), caller, sessionId, limit)
   };
 
   transient let defaultHttpCycles : Nat = 30_000_000_000;
 
   // Model discovery (for UI dropdowns)
   public shared ({ caller }) func models_list(provider : Provider, apiKey : Text) : async ModelsResult {
-    assertOwner(caller);
-    let resolvedApiKey = switch (resolveApiKey(provider, apiKey)) {
-      case (#err(e)) return #err(e);
-      case (#ok(k)) k;
-    };
-    await Llm.listModels(ic, http_transform, defaultHttpCycles, provider, resolvedApiKey)
-  };
-
-  func modelCaller(
-    provider : Provider,
-    model : Text,
-    apiKey : Text,
-    sysPrompt : Text,
-    history : [ChatMessage],
-    toolSpecs : [Sessions.ToolSpec],
-    maxTokens : ?Nat,
-    temperature : ?Float,
-  ) : async Result.Result<Text, Text> {
-    await Llm.callModel(
-      ic,
-      http_transform,
-      defaultHttpCycles,
-      provider,
-      model,
-      apiKey,
-      sysPrompt,
-      history,
-      toolSpecs,
-      maxTokens,
-      temperature,
-    )
-  };
-
-  let llmToolSpecs : [Sessions.ToolSpec] = LlmToolRouter.defaultSpecs;
-
-  func toolCaller(name : Text, args : [Text]) : async ToolResult {
-    await LlmToolRouter.dispatch(
-      name,
-      args,
-      func(toPrincipalText : Text, amountE8s : Nat64) : async Result.Result<Nat, Text> {
-        await WalletIcp.sendIcp(icpLedgerLocalPrincipal, icpLedgerMainnetPrincipal, toPrincipalText, amountE8s)
-      },
-      func(network : Text, toAddress : Text, amountWei : Nat) : async Result.Result<Text, Text> {
-        await WalletEvm.send(
-          ic,
-          http_transform,
-          defaultHttpCycles,
-          ic00,
-          Principal.fromActor(OpenClawOnICP),
-          Principal.fromActor(OpenClawOnICP),
-          network,
-          null,
-          toAddress,
-          amountWei,
-        )
-      },
-      func(chatId : Nat, messageText : Text) : async Result.Result<(), Text> {
-        let token = switch (tgBotToken) {
-          case null return #err("telegram bot token not configured");
-          case (?t) t;
-        };
-        await Telegram.sendMessage(ic, http_transform, defaultHttpCycles, token, chatId, messageText)
-      },
-      func(amountCkEthText : Text, maxIcpE8s : Nat64) : async Result.Result<Text, Text> {
-        await CkEthTrade.buyBest(ckethVenueConfig(), amountCkEthText, maxIcpE8s)
-      },
-    )
+    await ModelsMethods.list(modelsMethodsDeps(), caller, provider, apiKey)
   };
   public shared ({ caller }) func sessions_send(sessionId : Text, message : Text, opts : SendOptions) : async SendResult {
-    assertOwner(caller);
-    let resolvedApiKey = switch (resolveApiKey(opts.provider, opts.apiKey)) {
-      case (#err(e)) return #err(e);
-      case (#ok(k)) k;
+    await SessionsMethods.send(sessionsMethodsDeps(), caller, sessionId, message, opts)
+  };
+
+  public shared query ({ caller }) func dev_llm_traces(afterId : Nat, limit : Nat) : async [LlmTrace] {
+    assertOwnerQuery(caller);
+    let take = if (limit == 0) 100 else if (limit > 500) 500 else limit;
+    let out = Buffer.Buffer<LlmTrace>(take);
+    var i : Nat = 0;
+    let n = llmTraces.size();
+    while (i < n and out.size() < take) {
+      let trace = llmTraces.get(i);
+      if (trace.id > afterId) {
+        out.add(trace);
+      };
+      i += 1;
     };
-    let opts2 : SendOptions = {
-      provider = opts.provider;
-      model = opts.model;
-      apiKey = resolvedApiKey;
-      systemPrompt = opts.systemPrompt;
-      maxTokens = opts.maxTokens;
-      temperature = opts.temperature;
-      skillNames = opts.skillNames;
-      includeHistory = opts.includeHistory;
-    };
-    await Sessions.send(users, caller, sessionId, message, opts2, nowNs, modelCaller, ?toolCaller, llmToolSpecs)
+    Buffer.toArray(out)
   };
 
   // -----------------------------
@@ -620,83 +1182,58 @@ persistent actor OpenClawOnICP {
   // -----------------------------
 
   public shared ({ caller }) func skills_put(name : Text, markdown : Text) : async () {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Skills.put(u, name, markdown, nowNs);
+    SkillsMethods.put(skillsMethodsDeps(), caller, name, markdown);
   };
 
   public shared ({ caller }) func skills_get(name : Text) : async ?Text {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Skills.get(u, name)
+    SkillsMethods.get(skillsMethodsDeps(), caller, name)
   };
 
   public shared ({ caller }) func skills_list() : async [Text] {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Skills.list(u)
+    SkillsMethods.list(skillsMethodsDeps(), caller)
   };
 
   public shared ({ caller }) func skills_delete(name : Text) : async Bool {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Skills.delete(u, name)
+    SkillsMethods.delete(skillsMethodsDeps(), caller, name)
   };
 
   // -----------------------------
-  // tools_* (very limited, chain-safe)
+  // hooks_* + tools_* (unified tool registry)
   // -----------------------------
 
   public shared ({ caller }) func hooks_list() : async [HookEntry] {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Hooks.list(u)
+    HooksMethods.list(hooksMethodsDeps(), caller)
   };
 
   public shared ({ caller }) func hooks_put_command_reply(name : Text, command : Text, reply : Text) : async Bool {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Hooks.putCommandReply(u, name, command, reply)
+    HooksMethods.putCommandReply(hooksMethodsDeps(), caller, name, command, reply)
   };
 
   public shared ({ caller }) func hooks_put_message_reply(name : Text, keyword : Text, reply : Text) : async Bool {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Hooks.putMessageReply(u, name, keyword, reply)
+    HooksMethods.putMessageReply(hooksMethodsDeps(), caller, name, keyword, reply)
   };
 
   public shared ({ caller }) func hooks_put_command_tool(name : Text, command : Text, toolName : Text, toolArgs : [Text]) : async Bool {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Hooks.putCommandTool(u, name, command, toolName, toolArgs)
+    HooksMethods.putCommandTool(hooksMethodsDeps(), caller, name, command, toolName, toolArgs)
   };
 
   public shared ({ caller }) func hooks_put_message_tool(name : Text, keyword : Text, toolName : Text, toolArgs : [Text]) : async Bool {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Hooks.putMessageTool(u, name, keyword, toolName, toolArgs)
+    HooksMethods.putMessageTool(hooksMethodsDeps(), caller, name, keyword, toolName, toolArgs)
   };
 
   public shared ({ caller }) func hooks_delete(name : Text) : async Bool {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Hooks.delete(u, name)
+    HooksMethods.delete(hooksMethodsDeps(), caller, name)
   };
 
   public shared ({ caller }) func hooks_set_enabled(name : Text, enabled : Bool) : async Bool {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Hooks.setEnabled(u, name, enabled)
+    HooksMethods.setEnabled(hooksMethodsDeps(), caller, name, enabled)
   };
 
   public shared ({ caller }) func tools_list() : async [Text] {
-    assertOwner(caller);
-    Tools.list()
+    ToolsMethods.list(toolsMethodsDeps(), caller)
   };
 
   public shared ({ caller }) func tools_invoke(name : Text, args : [Text]) : async ToolResult {
-    assertOwner(caller);
-    let u = Store.getOrInitUser(users, caller);
-    Tools.invoke(u, name, args, nowNs)
+    await ToolsMethods.invoke(toolsMethodsDeps(), caller, name, args)
   };
 };

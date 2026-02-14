@@ -81,6 +81,16 @@ export interface InHttpResponse {
   ],
   'status_code' : number,
 }
+export interface LlmTrace {
+  'id' : bigint,
+  'url' : string,
+  'model' : string,
+  'provider' : string,
+  'tsNs' : bigint,
+  'error' : [] | [string],
+  'responseBody' : [] | [string],
+  'requestBody' : string,
+}
 export type ModelsResult = { 'ok' : Array<string> } |
   { 'err' : string };
 export type Provider = { 'openai' : null } |
@@ -158,6 +168,7 @@ export interface _SERVICE {
   'agent_wallet' : ActorMethod<[], WalletResult>,
   'canister_principal' : ActorMethod<[], Principal>,
   'cketh_status' : ActorMethod<[], CkEthStatus>,
+  'dev_llm_traces' : ActorMethod<[bigint, bigint], Array<LlmTrace>>,
   'discord_status' : ActorMethod<[], DiscordStatus>,
   'ecdsa_public_key' : ActorMethod<
     [Array<Uint8Array | number[]>, [] | [string]],
@@ -207,6 +218,25 @@ export interface _SERVICE {
   'wallet_balance_icrc1' : ActorMethod<[string], BalanceResult>,
   'wallet_buy_cketh' : ActorMethod<[string, bigint], BuyCkEthResult>,
   'wallet_buy_cketh_one' : ActorMethod<[bigint], BuyCkEthResult>,
+  'wallet_buy_erc20_uniswap' : ActorMethod<
+    [
+      string,
+      [] | [string],
+      string,
+      string,
+      string,
+      bigint,
+      bigint,
+      bigint,
+      bigint,
+      bigint,
+    ],
+    SendEthResult
+  >,
+  'wallet_buy_uni' : ActorMethod<
+    [string, [] | [string], bigint, bigint, bigint],
+    SendEthResult
+  >,
   'wallet_eth_address' : ActorMethod<[], EthAddressResult>,
   'wallet_send_erc20' : ActorMethod<
     [string, [] | [string], string, string, bigint],
@@ -225,6 +255,7 @@ export interface _SERVICE {
     [string, string, bigint, [] | [bigint]],
     SendIcrc1Result
   >,
+  'wallet_token_address' : ActorMethod<[string, string], [] | [string]>,
   'whoami' : ActorMethod<[], string>,
 }
 export declare const idlFactory: IDL.InterfaceFactory;

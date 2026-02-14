@@ -66,6 +66,26 @@ module {
     }
   };
 
+  // Extract the JSON object right after a needle like "\"input\":".
+  public func extractObjectAfter(raw : Text, needle : Text) : ?Text {
+    let it = Text.split(raw, #text needle);
+    ignore it.next();
+    switch (it.next()) {
+      case null null;
+      case (?after) readJsonObjectFromText(after);
+    }
+  };
+
+  public func extractObjectAfterAny(raw : Text, needles : [Text]) : ?Text {
+    for (n in needles.vals()) {
+      switch (extractObjectAfter(raw, n)) {
+        case null {};
+        case (?v) return ?v;
+      }
+    };
+    null
+  };
+
   func readJsonStringFromText(after : Text) : ?Text {
     let pieces = Buffer.Buffer<Text>(16);
     let cs = after.chars();
@@ -121,6 +141,60 @@ module {
             escaping := true;
           } else {
             pieces.add(Text.fromChar(c));
+          };
+        };
+      }
+    };
+    null
+  };
+
+  func readJsonObjectFromText(after : Text) : ?Text {
+    let pieces = Buffer.Buffer<Text>(32);
+    let cs = after.chars();
+    let chQuote = Char.fromNat32(34);
+    let chBackslash = Char.fromNat32(92);
+    var started = false;
+    var depth : Nat = 0;
+    var escaping = false;
+    var inString = false;
+
+    label read loop {
+      switch (cs.next()) {
+        case null return null;
+        case (?c) {
+          if (not started) {
+            if (c == '{') {
+              started := true;
+              depth := 1;
+              pieces.add(Text.fromChar(c));
+            } else if (c == ' ' or c == '\n' or c == '\r' or c == '\t') {
+              // skip leading whitespace
+            } else {
+              return null;
+            };
+            continue read;
+          };
+
+          pieces.add(Text.fromChar(c));
+          if (inString) {
+            if (escaping) {
+              escaping := false;
+            } else if (c == chBackslash) {
+              escaping := true;
+            } else if (c == chQuote) {
+              inString := false;
+            };
+            continue read;
+          };
+
+          if (c == chQuote) {
+            inString := true;
+          } else if (c == '{') {
+            depth += 1;
+          } else if (c == '}') {
+            if (depth == 0) return null;
+            depth -= 1;
+            if (depth == 0) return ?Text.join("", pieces.vals());
           };
         };
       }

@@ -18,7 +18,11 @@
 - 钱包：
   - ICP / ICRC1 转账与余额
   - ETH / ERC20 转账与余额（后端签名+广播）
+  - Uniswap V3 ERC20 兑换（`exactInputSingle`）
+  - 自动买 UNI（检查 ETH/USDC/USDT、自动选输入币、自动授权）
   - ckETH 按报价源比价（ICPSwap/KongSwap）并可执行买入
+- 研究：
+  - Polymarket 市场候选 + 新闻头条聚合（下注分析输入）
 - 多渠道：
   - Telegram webhook（`/tg/webhook`）
   - Discord webhook（`/discord/webhook`）
@@ -75,6 +79,11 @@ backend/
       ToolTimeNowNs.mo
       ToolWalletIcp.mo
       ToolWalletEth.mo
+      ToolWalletErc20.mo
+      ToolWalletBuyErc20Uniswap.mo
+      ToolWalletSwapUniswap.mo
+      ToolWalletBuyUni.mo
+      ToolPolymarketResearch.mo
       ToolWalletBuyCkEth.mo
       ToolTelegram.mo
     wallet/                      # ICP/EVM 钱包与交易
@@ -83,7 +92,11 @@ backend/
       WalletEvm.mo
       EthTx.mo
       TokenTransfer.mo
+      RpcConfig.mo
+      TokenConfig.mo
       CkEthTrade.mo
+    polymarket/
+      PolymarketResearch.mo
     channels/                    # 多渠道路由、dock 与插件注册
       ChannelRouter.mo
       ChannelDock.mo
@@ -200,9 +213,16 @@ dfx deploy
 当前注册工具：
 
 - `wallet_send_icp`：`<to_principal>|<amount_e8s>`
-- `wallet_send_eth`：`<network>|<to_address>|<amount_wei>`
+- `wallet_send_eth`：`<network>|<to_address>|<amount_wei>|<amount_eth>`（`amount_wei` 与 `amount_eth` 二选一）
+- `wallet_send_erc20`：`<network>|<token_address>|<to_address>|<amount>`
+- `wallet_buy_erc20_uniswap`：Uniswap V3 买 ERC20（`exactInputSingle`）
+- `wallet_swap_uniswap`：Uniswap V3 兑换 ERC20（支持 `auto_approve`）
+- `wallet_buy_uni`：自动买 UNI（余额检查、报价、自动授权、下单）
+- `polymarket_research`：拉取 Polymarket 市场候选 + 新闻头条
 - `wallet_buy_cketh`：`<amount_cketh>|<max_icp_e8s>`
 - `tg_send_message`：`<chat_id>|<text>`
+
+其中 `wallet_send_eth / wallet_send_erc20` 当前支持网络：`ethereum`、`base`、`polygon`。
 
 工具可见性说明：
 
@@ -214,6 +234,8 @@ dfx deploy
 参数约定：
 
 - tool payload 使用 `args_line`（字符串），后端按 `|` 拆分
+- `wallet_send_eth` 示例：发送 2 ETH 到 `0x5A3F43378E64D196E61c0C6294882C8235212E70`
+  - `wallet_send_eth|ethereum|0x5A3F43378E64D196E61c0C6294882C8235212E70||2`
 
 ## 渠道接入
 
@@ -241,6 +263,18 @@ dfx deploy
 ## 钱包与 ckETH 说明
 
 - ETH/ERC20：由后端查 nonce/gas、签名、广播
+- RPC 默认配置集中在：`backend/openclaw/wallet/RpcConfig.mo`
+  - `ethereum/eth/mainnet` -> `https://ethereum-rpc.publicnode.com`
+  - `base` -> `https://base-rpc.publicnode.com`
+  - `polygon/matic` -> `https://polygon-bor-rpc.publicnode.com`
+  - `solana` -> `https://solana-rpc.publicnode.com`（预留，当前未接入 Solana 转账/签名流程）
+- 代币/合约地址集中在：`backend/openclaw/wallet/TokenConfig.mo`
+- `wallet_swap_uniswap`：
+  - Uniswap V3 `exactInputSingle`
+  - `autoApprove=true` 时先检查 allowance，不足则先发 `approve`
+- `wallet_buy_uni`：
+  - 先检查 ETH gas 预留、USDC/USDT 余额
+  - 用 Quoter 报价，自动选更优输入币，再执行兑换
 - `wallet_buy_cketh`：
   - 支持 `{amount}`、`{amountWei}` 占位符 URL 模板
   - 先比较报价源，选更便宜 venue
@@ -320,6 +354,10 @@ dfx deploy
 - `wallet_send_eth_raw(network, rpcUrl, rawTxHex)`
 - `wallet_send_eth(network, rpcUrl, toAddress, amountWei)`
 - `wallet_send_erc20(network, rpcUrl, tokenAddress, toAddress, amount)`
+- `wallet_buy_erc20_uniswap(network, rpcUrl, routerAddress, tokenInAddress, tokenOutAddress, fee, amountIn, amountOutMinimum, deadline, sqrtPriceLimitX96)`
+- `wallet_swap_uniswap(network, rpcUrl, routerAddress, tokenInAddress, tokenOutAddress, fee, amountIn, amountOutMinimum, deadline, sqrtPriceLimitX96, autoApprove)`
+- `wallet_buy_uni(network, rpcUrl, amountUniBase, slippageBps, deadline)`
+- `wallet_token_address(network, symbol)`
 - `wallet_balance_icp()`
 - `wallet_balance_icrc1(ledgerPrincipalText)`
 - `wallet_balance_eth(network, rpcUrl)`
@@ -328,6 +366,10 @@ dfx deploy
 - `wallet_buy_cketh_one(maxIcpE8s)`
 - `ecdsa_public_key(derivationPath, keyName)`
 - `sign_with_ecdsa(messageHash, derivationPath, keyName)`
+
+### 研究
+
+- `polymarket_research(topic, marketLimit, newsLimit)`
 
 ### canister HTTP
 

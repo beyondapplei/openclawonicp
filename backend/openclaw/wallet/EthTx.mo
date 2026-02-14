@@ -16,11 +16,22 @@ import HttpTypes "../http/HttpTypes";
 import Json "../http/Json";
 import Wallet "./Wallet";
 import Llm "../llm/Llm";
+import RpcConfig "./RpcConfig";
+import TokenConfig "./TokenConfig";
 
 module {
   public type SendEthResult = Result.Result<Text, Text>;
   public type BalanceResult = Result.Result<Nat, Text>;
   public type AddressResult = Result.Result<Text, Text>;
+  type InputCandidate = {
+    symbol : Text;
+    tokenAddress : Text;
+    tokenBytes : [Nat8];
+    fee : Nat;
+    balance : Nat;
+    quoteIn : Nat;
+    maxIn : Nat;
+  };
 
   public func ethAddress(
     ic00 : Wallet.Ic00,
@@ -43,7 +54,7 @@ module {
       return #err("rawTxHex must start with 0x");
     };
 
-    let url = switch (resolveRpcUrl(network, rpcUrl)) {
+    let url = switch (RpcConfig.resolveRpcUrl(network, rpcUrl)) {
       case (#ok(u)) u;
       case (#err(e)) return #err(e);
     };
@@ -145,6 +156,426 @@ module {
     )
   };
 
+  public func buyErc20Uniswap(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    ic00 : Wallet.Ic00,
+    caller : Principal,
+    canisterId : Principal,
+    network : Text,
+    rpcUrl : ?Text,
+    routerAddress : Text,
+    tokenInAddress : Text,
+    tokenOutAddress : Text,
+    fee : Nat,
+    amountIn : Nat,
+    amountOutMinimum : Nat,
+    deadline : Nat,
+    sqrtPriceLimitX96 : Nat,
+  ) : async SendEthResult {
+    if (amountIn == 0) return #err("amountIn must be > 0");
+    if (fee == 0 or fee > 16_777_215) return #err("fee must be in range 1..16777215");
+    if (natToBytes(amountIn).size() > 32) return #err("amountIn exceeds uint256");
+    if (natToBytes(amountOutMinimum).size() > 32) return #err("amountOutMinimum exceeds uint256");
+    if (natToBytes(deadline).size() > 32) return #err("deadline exceeds uint256");
+    if (natToBytes(sqrtPriceLimitX96).size() > 20) return #err("sqrtPriceLimitX96 exceeds uint160");
+
+    let routerBytes = switch (parseAddress20(routerAddress)) {
+      case null return #err("invalid uniswap router address");
+      case (?b) b;
+    };
+    let tokenInBytes = switch (parseAddress20(tokenInAddress)) {
+      case null return #err("invalid tokenIn address");
+      case (?b) b;
+    };
+    let tokenOutBytes = switch (parseAddress20(tokenOutAddress)) {
+      case null return #err("invalid tokenOut address");
+      case (?b) b;
+    };
+    let signerAddress = switch (await backendEthAddress(ic00, caller, canisterId)) {
+      case (#ok(a)) a;
+      case (#err(e)) return #err(e);
+    };
+    let recipientBytes = switch (parseAddress20(signerAddress)) {
+      case null return #err("invalid signer address");
+      case (?b) b;
+    };
+
+    let data = encodeUniswapV3ExactInputSingleData(
+      tokenInBytes,
+      tokenOutBytes,
+      fee,
+      recipientBytes,
+      deadline,
+      amountIn,
+      amountOutMinimum,
+      sqrtPriceLimitX96,
+    );
+
+    await sendTransaction(
+      ic,
+      transform,
+      httpCycles,
+      ic00,
+      caller,
+      canisterId,
+      network,
+      rpcUrl,
+      "0x" # bytesToHex(routerBytes),
+      0,
+      data,
+    )
+  };
+
+  public func swapErc20Uniswap(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    ic00 : Wallet.Ic00,
+    caller : Principal,
+    canisterId : Principal,
+    network : Text,
+    rpcUrl : ?Text,
+    routerAddress : Text,
+    tokenInAddress : Text,
+    tokenOutAddress : Text,
+    fee : Nat,
+    amountIn : Nat,
+    amountOutMinimum : Nat,
+    deadline : Nat,
+    sqrtPriceLimitX96 : Nat,
+    autoApprove : Bool,
+  ) : async SendEthResult {
+    if (amountIn == 0) return #err("amountIn must be > 0");
+    if (fee == 0 or fee > 16_777_215) return #err("fee must be in range 1..16777215");
+    if (deadline == 0) return #err("deadline must be > 0");
+
+    var approveTxHash : ?Text = null;
+    if (autoApprove) {
+      let url = switch (RpcConfig.resolveRpcUrl(network, rpcUrl)) {
+        case (#ok(u)) u;
+        case (#err(e)) return #err(e);
+      };
+      let signerAddress = switch (await backendEthAddress(ic00, caller, canisterId)) {
+        case (#ok(a)) a;
+        case (#err(e)) return #err(e);
+      };
+      let signerBytes = switch (parseAddress20(signerAddress)) {
+        case null return #err("invalid signer address");
+        case (?b) b;
+      };
+      let tokenInBytes = switch (parseAddress20(tokenInAddress)) {
+        case null return #err("invalid tokenIn address");
+        case (?b) b;
+      };
+      let routerBytes = switch (parseAddress20(routerAddress)) {
+        case null return #err("invalid uniswap router address");
+        case (?b) b;
+      };
+      let allowance = switch (await erc20AllowanceByBytes(ic, transform, httpCycles, url, tokenInBytes, signerBytes, routerBytes)) {
+        case (#ok(v)) v;
+        case (#err(e)) return #err("failed to read allowance: " # e);
+      };
+      if (allowance < amountIn) {
+        let approveData = encodeErc20ApproveData(routerBytes, maxUint256());
+        switch (
+          await sendTransaction(
+            ic,
+            transform,
+            httpCycles,
+            ic00,
+            caller,
+            canisterId,
+            network,
+            rpcUrl,
+            tokenInAddress,
+            0,
+            approveData,
+          )
+        ) {
+          case (#ok(txh)) { approveTxHash := ?txh };
+          case (#err(e)) return #err("approve failed: " # e);
+        };
+      };
+    };
+
+    let swapTxHash = switch (
+      await buyErc20Uniswap(
+        ic,
+        transform,
+        httpCycles,
+        ic00,
+        caller,
+        canisterId,
+        network,
+        rpcUrl,
+        routerAddress,
+        tokenInAddress,
+        tokenOutAddress,
+        fee,
+        amountIn,
+        amountOutMinimum,
+        deadline,
+        sqrtPriceLimitX96,
+      )
+    ) {
+      case (#ok(txh)) txh;
+      case (#err(e)) return #err(e);
+    };
+
+    switch (approveTxHash) {
+      case null #ok(swapTxHash);
+      case (?ap) {
+        #ok(
+          "{" #
+          "\"approve_tx_hash\":\"" # Json.escape(ap) # "\"," #
+          "\"swap_tx_hash\":\"" # Json.escape(swapTxHash) # "\"" #
+          "}",
+        )
+      };
+    }
+  };
+
+  public func buyUniAuto(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    ic00 : Wallet.Ic00,
+    caller : Principal,
+    canisterId : Principal,
+    network : Text,
+    rpcUrl : ?Text,
+    amountUniBase : Nat,
+    slippageBps : Nat,
+    deadline : Nat,
+  ) : async SendEthResult {
+    if (amountUniBase == 0) return #err("amountUniBase must be > 0");
+    if (slippageBps > 5_000) return #err("slippageBps too large");
+    if (deadline == 0) return #err("deadline must be > 0");
+
+    let cfg = switch (TokenConfig.uniTradeConfig(network)) {
+      case null return #err("uni auto-buy only supports configured networks (currently ethereum)");
+      case (?v) v;
+    };
+
+    let url = switch (RpcConfig.resolveRpcUrl(network, rpcUrl)) {
+      case (#ok(u)) u;
+      case (#err(e)) return #err(e);
+    };
+
+    let signerAddress = switch (await backendEthAddress(ic00, caller, canisterId)) {
+      case (#ok(a)) a;
+      case (#err(e)) return #err(e);
+    };
+    let signerBytes = switch (parseAddress20(signerAddress)) {
+      case null return #err("invalid signer address");
+      case (?b) b;
+    };
+
+    let routerBytes = switch (parseAddress20(cfg.routerAddress)) {
+      case null return #err("invalid router address config");
+      case (?b) b;
+    };
+    let quoterBytes = switch (parseAddress20(cfg.quoterAddress)) {
+      case null return #err("invalid quoter address config");
+      case (?b) b;
+    };
+    let uniBytes = switch (parseAddress20(cfg.uniAddress)) {
+      case null return #err("invalid UNI token address config");
+      case (?b) b;
+    };
+    let usdcBytes = switch (parseAddress20(cfg.usdcAddress)) {
+      case null return #err("invalid USDC token address config");
+      case (?b) b;
+    };
+    let usdtBytes = switch (parseAddress20(cfg.usdtAddress)) {
+      case null return #err("invalid USDT token address config");
+      case (?b) b;
+    };
+
+    let ethBalance = switch (
+      await rpcHexNat(ic, transform, httpCycles, url, "eth_getBalance", "[\"" # Json.escape(signerAddress) # "\",\"latest\"]")
+    ) {
+      case (#ok(v)) v;
+      case (#err(e)) return #err(e);
+    };
+    if (ethBalance < cfg.minEthGasReserveWei) {
+      return #err(
+        "insufficient ETH for gas reserve, have " # Nat.toText(ethBalance) # " wei, need at least " # Nat.toText(cfg.minEthGasReserveWei) # " wei",
+      );
+    };
+
+    let usdcBalance = switch (await erc20BalanceByBytes(ic, transform, httpCycles, url, usdcBytes, signerBytes)) {
+      case (#ok(v)) v;
+      case (#err(e)) return #err("failed to read USDC balance: " # e);
+    };
+    let usdtBalance = switch (await erc20BalanceByBytes(ic, transform, httpCycles, url, usdtBytes, signerBytes)) {
+      case (#ok(v)) v;
+      case (#err(e)) return #err("failed to read USDT balance: " # e);
+    };
+    if (usdcBalance == 0 and usdtBalance == 0) {
+      return #err("insufficient stable balance: both USDC and USDT are zero");
+    };
+
+    var best : ?InputCandidate = null;
+
+    if (usdcBalance > 0) {
+      let quotedUsdcIn = switch (
+        await quoteExactOutputSingle(
+          ic,
+          transform,
+          httpCycles,
+          url,
+          quoterBytes,
+          usdcBytes,
+          uniBytes,
+          cfg.uniUsdcFee,
+          amountUniBase,
+          0,
+        )
+      ) {
+        case (#ok(v)) v;
+        case (#err(e)) return #err("USDC quote failed: " # e);
+      };
+      let maxUsdcIn = applySlippageBps(quotedUsdcIn, slippageBps);
+      if (maxUsdcIn <= usdcBalance) {
+        best := chooseBetterCandidate(
+          best,
+          {
+            symbol = "USDC";
+            tokenAddress = cfg.usdcAddress;
+            tokenBytes = usdcBytes;
+            fee = cfg.uniUsdcFee;
+            balance = usdcBalance;
+            quoteIn = quotedUsdcIn;
+            maxIn = maxUsdcIn;
+          },
+        );
+      };
+    };
+
+    if (usdtBalance > 0) {
+      let quotedUsdtIn = switch (
+        await quoteExactOutputSingle(
+          ic,
+          transform,
+          httpCycles,
+          url,
+          quoterBytes,
+          usdtBytes,
+          uniBytes,
+          cfg.uniUsdtFee,
+          amountUniBase,
+          0,
+        )
+      ) {
+        case (#ok(v)) v;
+        case (#err(e)) return #err("USDT quote failed: " # e);
+      };
+      let maxUsdtIn = applySlippageBps(quotedUsdtIn, slippageBps);
+      if (maxUsdtIn <= usdtBalance) {
+        best := chooseBetterCandidate(
+          best,
+          {
+            symbol = "USDT";
+            tokenAddress = cfg.usdtAddress;
+            tokenBytes = usdtBytes;
+            fee = cfg.uniUsdtFee;
+            balance = usdtBalance;
+            quoteIn = quotedUsdtIn;
+            maxIn = maxUsdtIn;
+          },
+        );
+      };
+    };
+
+    let chosen = switch (best) {
+      case null {
+        return #err(
+          "insufficient balance after quote: USDC=" # Nat.toText(usdcBalance) # ", USDT=" # Nat.toText(usdtBalance) #
+          ", requested UNI(base)=" # Nat.toText(amountUniBase),
+        );
+      };
+      case (?c) c;
+    };
+
+    let allowance = switch (await erc20AllowanceByBytes(ic, transform, httpCycles, url, chosen.tokenBytes, signerBytes, routerBytes)) {
+      case (#ok(v)) v;
+      case (#err(e)) return #err("failed to read allowance: " # e);
+    };
+
+    var approveTxHash : ?Text = null;
+    if (allowance < chosen.maxIn) {
+      let approveData = encodeErc20ApproveData(routerBytes, maxUint256());
+      switch (
+        await sendTransaction(
+          ic,
+          transform,
+          httpCycles,
+          ic00,
+          caller,
+          canisterId,
+          network,
+          rpcUrl,
+          chosen.tokenAddress,
+          0,
+          approveData,
+        )
+      ) {
+        case (#ok(txh)) { approveTxHash := ?txh };
+        case (#err(e)) return #err("approve failed: " # e);
+      };
+    };
+
+    let swapData = encodeUniswapV3ExactOutputSingleData(
+      chosen.tokenBytes,
+      uniBytes,
+      chosen.fee,
+      signerBytes,
+      deadline,
+      amountUniBase,
+      chosen.maxIn,
+      0,
+    );
+    let swapTxHash = switch (
+      await sendTransaction(
+        ic,
+        transform,
+        httpCycles,
+        ic00,
+        caller,
+        canisterId,
+        network,
+        rpcUrl,
+        cfg.routerAddress,
+        0,
+        swapData,
+      )
+    ) {
+      case (#ok(txh)) txh;
+      case (#err(e)) return #err("swap failed: " # e);
+    };
+
+    let approveField = switch (approveTxHash) {
+      case null "\"approve_tx_hash\":null";
+      case (?v) "\"approve_tx_hash\":\"" # Json.escape(v) # "\"";
+    };
+    #ok(
+      "{" #
+      "\"swap_tx_hash\":\"" # Json.escape(swapTxHash) # "\"," #
+      "\"input_token\":\"" # chosen.symbol # "\"," #
+      "\"amount_in_quote\":\"" # Nat.toText(chosen.quoteIn) # "\"," #
+      "\"amount_in_max\":\"" # Nat.toText(chosen.maxIn) # "\"," #
+      "\"uni_amount_out\":\"" # Nat.toText(amountUniBase) # "\"," #
+      "\"eth_balance\":\"" # Nat.toText(ethBalance) # "\"," #
+      "\"usdc_balance\":\"" # Nat.toText(usdcBalance) # "\"," #
+      "\"usdt_balance\":\"" # Nat.toText(usdtBalance) # "\"," #
+      approveField #
+      "}",
+    )
+  };
+
   public func balanceEth(
     ic : Llm.Http,
     transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
@@ -155,7 +586,7 @@ module {
     network : Text,
     rpcUrl : ?Text,
   ) : async BalanceResult {
-    let url = switch (resolveRpcUrl(network, rpcUrl)) {
+    let url = switch (RpcConfig.resolveRpcUrl(network, rpcUrl)) {
       case (#ok(u)) u;
       case (#err(e)) return #err(e);
     };
@@ -177,7 +608,7 @@ module {
     rpcUrl : ?Text,
     tokenAddress : Text,
   ) : async BalanceResult {
-    let url = switch (resolveRpcUrl(network, rpcUrl)) {
+    let url = switch (RpcConfig.resolveRpcUrl(network, rpcUrl)) {
       case (#ok(u)) u;
       case (#err(e)) return #err(e);
     };
@@ -232,7 +663,7 @@ module {
     valueWei : Nat,
     data : [Nat8],
   ) : async SendEthResult {
-    let url = switch (resolveRpcUrl(network, rpcUrl)) {
+    let url = switch (RpcConfig.resolveRpcUrl(network, rpcUrl)) {
       case (#ok(u)) u;
       case (#err(e)) return #err(e);
     };
@@ -268,7 +699,10 @@ module {
 
     let gas = (gasEstimate * 12) / 10;
     let maxPriorityFeePerGas = if (gasPrice / 10 == 0) 1 else gasPrice / 10;
-    let chainId : Nat = if (isBase(network)) 8453 else 1;
+    let chainId : Nat = switch (RpcConfig.chainId(network)) {
+      case (?id) id;
+      case null return #err("unsupported network: " # network);
+    };
 
     let unsigned = encodeEip1559Unsigned(chainId, nonce, maxPriorityFeePerGas, gasPrice, gas, toBytes, valueWei, data);
     let txHash = keccak256(unsigned);
@@ -329,8 +763,93 @@ module {
     ])
   };
 
+  func encodeUniswapV3ExactInputSingleData(
+    tokenIn : [Nat8],
+    tokenOut : [Nat8],
+    fee : Nat,
+    recipient : [Nat8],
+    deadline : Nat,
+    amountIn : Nat,
+    amountOutMinimum : Nat,
+    sqrtPriceLimitX96 : Nat,
+  ) : [Nat8] {
+    let signature = "exactInputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))";
+    let selector = slice(keccak256(Blob.toArray(Text.encodeUtf8(signature))), 0, 4);
+    concatAll([
+      selector,
+      leftPad32(tokenIn),
+      leftPad32(tokenOut),
+      natToFixed32(fee),
+      leftPad32(recipient),
+      natToFixed32(deadline),
+      natToFixed32(amountIn),
+      natToFixed32(amountOutMinimum),
+      natToFixed32(sqrtPriceLimitX96),
+    ])
+  };
+
+  func encodeUniswapV3ExactOutputSingleData(
+    tokenIn : [Nat8],
+    tokenOut : [Nat8],
+    fee : Nat,
+    recipient : [Nat8],
+    deadline : Nat,
+    amountOut : Nat,
+    amountInMaximum : Nat,
+    sqrtPriceLimitX96 : Nat,
+  ) : [Nat8] {
+    let signature = "exactOutputSingle((address,address,uint24,address,uint256,uint256,uint256,uint160))";
+    let selector = slice(keccak256(Blob.toArray(Text.encodeUtf8(signature))), 0, 4);
+    concatAll([
+      selector,
+      leftPad32(tokenIn),
+      leftPad32(tokenOut),
+      natToFixed32(fee),
+      leftPad32(recipient),
+      natToFixed32(deadline),
+      natToFixed32(amountOut),
+      natToFixed32(amountInMaximum),
+      natToFixed32(sqrtPriceLimitX96),
+    ])
+  };
+
+  func encodeQuoterQuoteExactOutputSingleData(
+    tokenIn : [Nat8],
+    tokenOut : [Nat8],
+    fee : Nat,
+    amountOut : Nat,
+    sqrtPriceLimitX96 : Nat,
+  ) : [Nat8] {
+    let signature = "quoteExactOutputSingle(address,address,uint24,uint256,uint160)";
+    let selector = slice(keccak256(Blob.toArray(Text.encodeUtf8(signature))), 0, 4);
+    concatAll([
+      selector,
+      leftPad32(tokenIn),
+      leftPad32(tokenOut),
+      natToFixed32(fee),
+      natToFixed32(amountOut),
+      natToFixed32(sqrtPriceLimitX96),
+    ])
+  };
+
   func encodeErc20BalanceOfData(owner : [Nat8]) : [Nat8] {
     Array.append<Nat8>([0x70, 0xa0, 0x82, 0x31], leftPad32(owner))
+  };
+
+  func encodeErc20AllowanceData(owner : [Nat8], spender : [Nat8]) : [Nat8] {
+    concatAll([
+      [0xdd, 0x62, 0xed, 0x3e],
+      leftPad32(owner),
+      leftPad32(spender),
+    ])
+  };
+
+  func encodeErc20ApproveData(spender : [Nat8], amount : Nat) : [Nat8] {
+    concatAll([
+      [0x09, 0x5e, 0xa7, 0xb3],
+      leftPad32(spender),
+      natToFixed32(amount),
+    ])
   };
 
   func leftPad32(bytes : [Nat8]) : [Nat8] {
@@ -360,6 +879,117 @@ module {
       a - b
     } else {
       0
+    }
+  };
+
+  func applySlippageBps(amount : Nat, bps : Nat) : Nat {
+    if (bps == 0) return amount;
+    let numer = amount * (10_000 + bps);
+    let withBps = numer / 10_000;
+    if (withBps < amount) amount else withBps
+  };
+
+  func chooseBetterCandidate(current : ?InputCandidate, next : InputCandidate) : ?InputCandidate {
+    switch (current) {
+      case null ?next;
+      case (?c) {
+        if (next.maxIn < c.maxIn) ?next else ?c
+      }
+    }
+  };
+
+  func erc20BalanceByBytes(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    url : Text,
+    token : [Nat8],
+    owner : [Nat8],
+  ) : async Result.Result<Nat, Text> {
+    await ethCallUint(
+      ic,
+      transform,
+      httpCycles,
+      url,
+      token,
+      encodeErc20BalanceOfData(owner),
+      "erc20.balanceOf",
+    )
+  };
+
+  func erc20AllowanceByBytes(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    url : Text,
+    token : [Nat8],
+    owner : [Nat8],
+    spender : [Nat8],
+  ) : async Result.Result<Nat, Text> {
+    await ethCallUint(
+      ic,
+      transform,
+      httpCycles,
+      url,
+      token,
+      encodeErc20AllowanceData(owner, spender),
+      "erc20.allowance",
+    )
+  };
+
+  func quoteExactOutputSingle(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    url : Text,
+    quoter : [Nat8],
+    tokenIn : [Nat8],
+    tokenOut : [Nat8],
+    fee : Nat,
+    amountOut : Nat,
+    sqrtPriceLimitX96 : Nat,
+  ) : async Result.Result<Nat, Text> {
+    await ethCallUint(
+      ic,
+      transform,
+      httpCycles,
+      url,
+      quoter,
+      encodeQuoterQuoteExactOutputSingleData(tokenIn, tokenOut, fee, amountOut, sqrtPriceLimitX96),
+      "uniswap.quoteExactOutputSingle",
+    )
+  };
+
+  func ethCallUint(
+    ic : Llm.Http,
+    transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
+    httpCycles : Nat,
+    url : Text,
+    to : [Nat8],
+    data : [Nat8],
+    methodName : Text,
+  ) : async Result.Result<Nat, Text> {
+    let payload = switch (
+      await rpcCall(
+        ic,
+        transform,
+        httpCycles,
+        url,
+        "eth_call",
+        "[{\"to\":\"0x" # bytesToHex(to) # "\",\"data\":\"0x" # bytesToHex(data) # "\"},\"latest\"]",
+      )
+    ) {
+      case (#ok(p)) p;
+      case (#err(e)) return #err(e);
+    };
+    switch (Json.extractStringAfterAny(payload, ["\"result\":\"", "\"result\": \""])) {
+      case null #err(methodName # " result missing");
+      case (?hex) {
+        switch (hexToNat(hex)) {
+          case null #err("invalid hex result for " # methodName);
+          case (?v) #ok(v);
+        }
+      }
     }
   };
 
@@ -618,6 +1248,13 @@ module {
     }
   };
 
+  func maxUint256() : Nat {
+    switch (hexToNat("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")) {
+      case (?v) v;
+      case null Debug.trap("invalid max uint256");
+    }
+  };
+
   func rpcHexNat(
     ic : Llm.Http,
     transform : shared query HttpTypes.TransformArgs -> async HttpTypes.HttpResponsePayload,
@@ -680,10 +1317,6 @@ module {
     #ok(payload)
   };
 
-  func isBase(network : Text) : Bool {
-    Text.toLowercase(Text.trim(network, #char ' ')) == "base"
-  };
-
   func natToHex(n : Nat) : Text {
     if (n == 0) return "0x0";
     let table = [
@@ -727,22 +1360,4 @@ module {
     ?acc
   };
 
-  func resolveRpcUrl(network : Text, rpcUrl : ?Text) : Result.Result<Text, Text> {
-    switch (rpcUrl) {
-      case (?u) {
-        let t = Text.trim(u, #char ' ');
-        if (Text.size(t) > 0) return #ok(t);
-      };
-      case null {};
-    };
-
-    let n = Text.toLowercase(Text.trim(network, #char ' '));
-    if (n == "ethereum" or n == "eth" or n == "mainnet") {
-      return #ok("https://ethereum-rpc.publicnode.com");
-    };
-    if (n == "base") {
-      return #ok("https://mainnet.base.org");
-    };
-    #err("unsupported network: " # network)
-  };
 }
