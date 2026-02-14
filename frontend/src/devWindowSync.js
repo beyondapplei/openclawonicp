@@ -1,5 +1,5 @@
-const STORAGE_KEY = 'openclaw.dev_window.state.v1';
-const CHANNEL_NAME = 'openclaw.dev_window.channel.v1';
+const STORAGE_KEY = 'agentonicp.dev_window.state.v1';
+const CHANNEL_NAME = 'agentonicp.dev_window.channel.v1';
 const MAX_EVENTS = 200;
 
 let channel = null;

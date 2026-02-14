@@ -1,10 +1,10 @@
-# OpenClaw 架构对齐说明（openclawonicp）
+# OpenClaw 架构对齐说明（agentonicp）
 
-本文记录 `openclawonicp` 对 `openclaw` 上游架构的同构映射，目标是让当前 ICP 版本在分层与流程上尽量接近原工程。
+本文记录 `agentonicp` 对 `openclaw` 上游架构的同构映射，目标是让当前 ICP 版本在分层与流程上尽量接近原工程。
 
 ## 上游主干（抽样）
 
-上游仓库（本地参考：`/Users/wangbinmac/gith/openclawonicp/_upstream_openclaw`）的核心分层：
+上游仓库（本地参考：`/Users/wangbinmac/gith/agentonicp/_upstream_openclaw`）的核心分层：
 
 - `src/gateway/server-methods/*`：按域拆分网关方法
 - `src/auto-reply/dispatch.ts`：统一入站消息分发

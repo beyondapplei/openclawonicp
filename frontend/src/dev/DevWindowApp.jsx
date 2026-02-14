@@ -72,7 +72,7 @@ export default function DevWindowApp() {
   }, [state.history]);
 
   function clearLogs() {
-    window.localStorage.removeItem('openclaw.dev_window.state.v1');
+    window.localStorage.removeItem('agentonicp.dev_window.state.v1');
     setState(readDevWindowState());
   }
 

@@ -7,7 +7,7 @@ import {
 
 const I18N = {
   zh: {
-    title: 'OpenClaw on ICP（极简版）',
+    title: 'AgentOnICP（极简版）',
     session: '会话',
     provider: '提供方',
     model: '模型',
@@ -75,7 +75,7 @@ const I18N = {
     noSkills: '暂无 Skills',
   },
   en: {
-    title: 'OpenClaw on ICP (minimal)',
+    title: 'AgentOnICP (minimal)',
     session: 'Session',
     provider: 'Provider',
     model: 'Model',
@@ -167,7 +167,7 @@ function readOptText(v) {
   return Array.isArray(v) && v.length > 0 && typeof v[0] === 'string' ? v[0] : '';
 }
 
-const CHAT_PREFS_KEY = 'openclaw.main.chat_prefs.v1';
+const CHAT_PREFS_KEY = 'agentonicp.main.chat_prefs.v1';
 const DEFAULT_PROVIDER = 'openai';
 const DEFAULT_MODEL = 'gpt-4o-mini';
 

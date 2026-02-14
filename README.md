@@ -1,4 +1,4 @@
-# OpenClaw on ICP（当前实现）
+# AgentOnICP（当前实现）
 
 这个仓库是 OpenClaw 在 Internet Computer（ICP）canister 环境下的最小可运行实现。
 
@@ -6,6 +6,14 @@
 - 前端：Vite + React（聊天页、管理页、钱包页）
 
 说明：README 已按当前代码实现更新（以 `backend/app.mo` 与 `src/declarations/backend/backend.did` 为准）。
+
+## 近期功能更新
+
+- 项目对外名称统一为 `AgentOnICP`
+- 钱包新增 Uniswap V3 兑换工具链：`wallet_buy_erc20_uniswap`、`wallet_swap_uniswap`
+- 钱包新增自动买 UNI：`wallet_buy_uni`（余额检查、报价、自动授权）
+- 新增 Polymarket 研究能力：`polymarket_research`
+- 开发窗口支持查看发送/接收的大模型完整文本
 
 ## 功能说明
 
@@ -50,7 +58,7 @@
 - `channels/ChannelDock`：渠道轻量元信息（webhook 前缀、session 前缀）
 - `core/ + llm/ + wallet/`：分别承载会话状态、模型与工具、链上钱包能力
 
-详细映射见：`/Users/wangbinmac/gith/openclawonicp/ARCHITECTURE_ALIGNMENT.md`
+详细映射见：`/Users/wangbinmac/gith/agentonicp/ARCHITECTURE_ALIGNMENT.md`
 
 ## 目录结构（新）
 

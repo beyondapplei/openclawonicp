@@ -192,6 +192,7 @@ export interface _SERVICE {
   'http_transform' : ActorMethod<[TransformArgs], HttpResponsePayload>,
   'models_list' : ActorMethod<[Provider, string], ModelsResult>,
   'owner_get' : ActorMethod<[], [] | [Principal]>,
+  'polymarket_research' : ActorMethod<[string, bigint, bigint], Result>,
   'sessions_create' : ActorMethod<[string], undefined>,
   'sessions_history' : ActorMethod<[string, bigint], Array<ChatMessage>>,
   'sessions_list' : ActorMethod<[], Array<SessionSummary>>,
@@ -254,6 +255,22 @@ export interface _SERVICE {
   'wallet_send_icrc1' : ActorMethod<
     [string, string, bigint, [] | [bigint]],
     SendIcrc1Result
+  >,
+  'wallet_swap_uniswap' : ActorMethod<
+    [
+      string,
+      [] | [string],
+      string,
+      string,
+      string,
+      bigint,
+      bigint,
+      bigint,
+      bigint,
+      bigint,
+      boolean,
+    ],
+    SendEthResult
   >,
   'wallet_token_address' : ActorMethod<[string, string], [] | [string]>,
   'whoami' : ActorMethod<[], string>,

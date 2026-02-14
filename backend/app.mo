@@ -35,7 +35,7 @@ import AuthContext "./openclaw/gateway/context/AuthContext";
 import GatewayRuntime "./openclaw/gateway/runtime/GatewayRuntime";
 import Migration "migration";
 
-persistent actor OpenClawOnICP {
+persistent actor AgentOnICP {
   // -----------------------------
   // Public types (Candid surface)
   // -----------------------------
@@ -261,7 +261,7 @@ persistent actor OpenClawOnICP {
   };
 
   func selfPrincipal() : Principal {
-    Principal.fromActor(OpenClawOnICP)
+    Principal.fromActor(AgentOnICP)
   };
 
   func providerText(provider : Provider) : Text {

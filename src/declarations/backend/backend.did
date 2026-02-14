@@ -255,6 +255,8 @@ service : {
   http_transform: (args: TransformArgs) -> (HttpResponsePayload) query;
   models_list: (provider: Provider, apiKey: text) -> (ModelsResult);
   owner_get: () -> (opt principal) query;
+  polymarket_research: (topic: text, marketLimit: nat, newsLimit: nat) ->
+   (Result);
   sessions_create: (sessionId: text) -> ();
   sessions_history: (sessionId: text, limit: nat) -> (vec ChatMessage);
   sessions_list: () -> (vec SessionSummary);
@@ -296,6 +298,10 @@ service : {
    (SendIcpResult);
   wallet_send_icrc1: (ledgerPrincipalText: text, toPrincipalText: text,
    amount: nat, fee: opt nat) -> (SendIcrc1Result);
+  wallet_swap_uniswap: (network: text, rpcUrl: opt text, routerAddress: 
+   text, tokenInAddress: text, tokenOutAddress: text, fee: nat, amountIn:
+   nat, amountOutMinimum: nat, deadline: nat, sqrtPriceLimitX96: nat,
+   autoApprove: bool) -> (SendEthResult);
   wallet_token_address: (network: text, symbol: text) -> (opt text) query;
   whoami: () -> (text);
 }

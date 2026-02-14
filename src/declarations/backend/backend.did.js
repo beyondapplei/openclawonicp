@@ -215,6 +215,11 @@ export const idlFactory = ({ IDL }) => {
       ),
     'models_list' : IDL.Func([Provider, IDL.Text], [ModelsResult], []),
     'owner_get' : IDL.Func([], [IDL.Opt(IDL.Principal)], ['query']),
+    'polymarket_research' : IDL.Func(
+        [IDL.Text, IDL.Nat, IDL.Nat],
+        [Result],
+        [],
+      ),
     'sessions_create' : IDL.Func([IDL.Text], [], []),
     'sessions_history' : IDL.Func(
         [IDL.Text, IDL.Nat],
@@ -300,6 +305,23 @@ export const idlFactory = ({ IDL }) => {
     'wallet_send_icrc1' : IDL.Func(
         [IDL.Text, IDL.Text, IDL.Nat, IDL.Opt(IDL.Nat)],
         [SendIcrc1Result],
+        [],
+      ),
+    'wallet_swap_uniswap' : IDL.Func(
+        [
+          IDL.Text,
+          IDL.Opt(IDL.Text),
+          IDL.Text,
+          IDL.Text,
+          IDL.Text,
+          IDL.Nat,
+          IDL.Nat,
+          IDL.Nat,
+          IDL.Nat,
+          IDL.Nat,
+          IDL.Bool,
+        ],
+        [SendEthResult],
         [],
       ),
     'wallet_token_address' : IDL.Func(
