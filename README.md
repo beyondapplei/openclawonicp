@@ -7,6 +7,19 @@
 
 说明：README 已按当前代码实现更新（以 `backend/app.mo` 与 `src/declarations/backend/backend.did` 为准）。
 
+## 配置文件目录
+
+- 项目配置文件已集中到 `config/`：
+  - `config/dfx.json`
+  - `config/mops.toml`
+- 根目录保留同名软链接（`dfx.json`、`mops.toml`）以兼容默认工具行为。
+- 后端业务配置已集中到 `backend/agentonicp/config/`：
+  - `AppConfig.mo`（开发/生产模式、鉴权开关、默认 cycles、ledger 与 key 配置）
+  - `RpcConfig.mo`（网络定义、默认 RPC、网络规范化）
+  - `TokenConfig.mo`（EVM 交易/路由相关常量）
+  - `TokenListConfig.mo`（按网络路由到链级代币清单）
+  - `token_list/*.mo`（每条链一个文件的默认代币清单）
+
 ## 当前架构文档
 
 - 最新架构与功能说明（中文）：`/Users/wangbinmac/gith/agentonicp/ARCHITECTURE_CURRENT_ZH.md`
@@ -22,6 +35,21 @@
 - 修复 `sign_with_ecdsa` / `ecdsa_public_key` 的 0 cycles 问题（管理调用已附带 cycles）
 - 钱包交易记录支持 EVM：ETH 在各 EVM 链可查看本应用发起的交易历史
 - 钱包新增 EVM 手动添加代币合约地址（ERC20），添加后自动展示余额并可直接发起转账
+- Solana 网络支持与 EVM 一致的“添加代币”流程（统一入口）：
+  - 前端在 Solana 网络可直接添加代币地址（mint）
+  - 后端会校验 Solana mint 格式，并将地址按网络原样保存（不做 EVM 小写化）
+  - 后端会尝试自动获取并持久化代币元数据：`decimals`、`symbol`、`name`
+  - 元数据获取优先顺序：`getTokenSupply`（decimals）+ `getTokenMetadata`/`getAsset`（symbol/name）
+- TokenList 配置已拆分为“每条链一个文件”，便于独立维护和审计：
+  - `backend/agentonicp/config/token_list/Ethereum.mo`
+  - `backend/agentonicp/config/token_list/Sepolia.mo`
+  - `backend/agentonicp/config/token_list/Base.mo`
+  - `backend/agentonicp/config/token_list/Polygon.mo`
+  - `backend/agentonicp/config/token_list/Arbitrum.mo`
+  - `backend/agentonicp/config/token_list/Optimism.mo`
+  - `backend/agentonicp/config/token_list/Bsc.mo`
+  - `backend/agentonicp/config/token_list/Avalanche.mo`
+  - `backend/agentonicp/config/token_list/Solana.mo`
 
 ## 功能说明
 
