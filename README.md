@@ -1,6 +1,4 @@
-# AgentOnICP（当前实现）
 
-这个仓库是 OpenClaw 在 Internet Computer（ICP）canister 环境下的最小可运行实现。
 
 - 后端：Motoko canister（会话、技能、Hooks、结构化工具调用、钱包能力、Webhook 通道）
 - 前端：Vite + React（聊天页、管理页、钱包页）
